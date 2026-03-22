@@ -9,6 +9,8 @@ internal interface IBrowserSession : IAsyncDisposable
     event EventHandler? Disconnected;
 
     ValueTask<IPageSession> CreatePageAsync(CancellationToken cancellationToken);
+
+    ValueTask<bool> IsResponsiveAsync(TimeSpan timeout, CancellationToken cancellationToken);
 }
 
 internal interface IPageSession : IAsyncDisposable

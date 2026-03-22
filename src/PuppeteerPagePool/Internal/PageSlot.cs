@@ -8,7 +8,5 @@ internal sealed class PageSlot
 
     public int UseCount { get; set; }
 
-    public int ConsecutiveFailures { get; set; }
-
     public PageSlotState State { get; set; }
 }

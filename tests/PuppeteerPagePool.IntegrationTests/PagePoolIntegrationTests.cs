@@ -38,20 +38,26 @@ public sealed class PagePoolIntegrationTests
 
         var pool = serviceProvider.GetRequiredService<IPagePool>();
 
-        await using (var firstLease = await pool.AcquireAsync())
-        {
-            await firstLease.Page.GoToAsync(new Uri(server.BaseAddress, "state").ToString());
-        }
+        await pool.WithPage(
+            async page =>
+            {
+                await page.GoToAsync(new Uri(server.BaseAddress, "state").ToString());
+            });
 
-        await using var secondLease = await pool.AcquireAsync();
-        var storageState = await secondLease.Page.EvaluateExpressionAsync<string>("JSON.stringify({ local: localStorage.getItem('render-state'), session: sessionStorage.getItem('render-session') })");
-        var cookieNames = (await secondLease.Page.GetCookiesAsync()).Select(cookie => cookie.Name).ToArray();
+        var state = await pool.WithPage(
+            async page =>
+            {
+                var storageState = await page.EvaluateExpressionAsync<string>("JSON.stringify({ local: localStorage.getItem('render-state'), session: sessionStorage.getItem('render-session') })");
+                var cookieNames = (await page.GetCookiesAsync()).Select(cookie => cookie.Name).ToArray();
+                return (storageState, cookieNames);
+            });
+
         var snapshot = await pool.GetSnapshotAsync();
 
-        Assert.Equal("""{"local":null,"session":null}""", storageState);
-        Assert.DoesNotContain("session", cookieNames);
+        Assert.Equal("""{"local":null,"session":null}""", state.storageState);
+        Assert.DoesNotContain("session", state.cookieNames);
         Assert.True(snapshot.BrowserConnected);
-        Assert.Equal(1, snapshot.LeasedPages);
-        Assert.Equal(0, snapshot.AvailablePages);
+        Assert.Equal(0, snapshot.LeasedPages);
+        Assert.Equal(1, snapshot.AvailablePages);
     }
 }

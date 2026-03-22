@@ -5,6 +5,26 @@ namespace PuppeteerPagePool.Internal;
 
 internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 {
+    private static readonly string[] DefaultLaunchArguments =
+    [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-extensions",
+        "--no-zygote",
+        "--no-first-run",
+        "--disable-sync",
+        "--disable-accelerated-2d-canvas",
+        "--force-color-profile=srgb",
+        "--renderer-process-limit=1",
+        "--js-flags=--max-old-space-size=128",
+        "--disk-cache-size=1",
+        "--media-cache-size=1",
+        "--disable-background-timer-throttling",
+        "--disable-features=TranslateUI,ImprovedCookieControls,AudioServiceOutOfProcess,SitePerProcess"
+    ];
+
     public async ValueTask<IBrowserSession> CreateAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
     {
         if (options.ConnectOptions is not null)
@@ -15,10 +35,20 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 
         var launchOptions = options.LaunchOptions ?? new LaunchOptions
         {
-            Headless = true
+            Headless = true,
+            Args = [.. DefaultLaunchArguments]
         };
 
-        if (options.EnsureBrowserDownloaded)
+        if (string.IsNullOrWhiteSpace(launchOptions.ExecutablePath))
+        {
+            var executablePath = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
+            if (!string.IsNullOrWhiteSpace(executablePath) && File.Exists(executablePath))
+            {
+                launchOptions.ExecutablePath = executablePath;
+            }
+        }
+
+        if (options.EnsureBrowserDownloaded && string.IsNullOrWhiteSpace(launchOptions.ExecutablePath))
         {
             var browserFetcher = new BrowserFetcher(new BrowserFetcherOptions
             {
@@ -60,6 +90,27 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
             return new PuppeteerPageSession(page);
         }
 
+        public async ValueTask<bool> IsResponsiveAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            if (!_browser.IsConnected || _browser.IsClosed)
+            {
+                return false;
+            }
+
+            try
+            {
+                var version = await _browser.GetVersionAsync()
+                    .WaitAsync(timeout, cancellationToken)
+                    .ConfigureAwait(false);
+
+                return !string.IsNullOrWhiteSpace(version);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public async ValueTask DisposeAsync()
         {
             _browser.Disconnected -= OnDisconnected;
@@ -93,6 +144,8 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 
         public async ValueTask InitializeAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
         {
+            await _page.SetJavaScriptEnabledAsync(options.JavaScriptEnabled).ConfigureAwait(false);
+
             if (options.ConfigurePageAsync is not null)
             {
                 await options.ConfigurePageAsync(_page, cancellationToken).ConfigureAwait(false);
@@ -103,6 +156,11 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 
         public async ValueTask PrepareForLeaseAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
         {
+            if (options.ValidatePageHealthBeforeLease)
+            {
+                await EnsurePageIsHealthyAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             if (options.BeforeLeaseAsync is not null)
             {
                 await options.BeforeLeaseAsync(_page, cancellationToken).ConfigureAwait(false);
@@ -113,8 +171,11 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
         {
             await _page.GoToAsync(options.ResetTargetUrl, new NavigationOptions
             {
-                WaitUntil = [WaitUntilNavigation.Networkidle0]
+                WaitUntil = options.ResetWaitUntil,
+                Timeout = (int)options.ResetNavigationTimeout.TotalMilliseconds
             }).ConfigureAwait(false);
+
+            await _page.SetJavaScriptEnabledAsync(options.JavaScriptEnabled).ConfigureAwait(false);
 
             if (options.ClearCookiesOnReturn)
             {
@@ -139,6 +200,22 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
             }
 
             await _page.CloseAsync().ConfigureAwait(false);
+        }
+
+        private async ValueTask EnsurePageIsHealthyAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (_page.IsClosed)
+            {
+                throw new InvalidOperationException("The pooled page is closed.");
+            }
+
+            var readyState = await _page.EvaluateExpressionAsync<string>("document.readyState").ConfigureAwait(false);
+            if (readyState is not "complete" and not "interactive")
+            {
+                throw new InvalidOperationException("The pooled page is not in a healthy ready state.");
+            }
         }
     }
 }

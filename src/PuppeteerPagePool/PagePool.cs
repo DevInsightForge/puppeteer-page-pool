@@ -1,15 +1,13 @@
-using System.Diagnostics;
 using System.Threading.Channels;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using PuppeteerPagePool.Diagnostics;
 using PuppeteerPagePool.Internal;
+using PuppeteerSharp;
 
 namespace PuppeteerPagePool;
 
-public sealed class PagePool : IPagePool
+internal sealed class PagePool : IPagePool
 {
     private readonly ILogger<PagePool> _logger;
     private readonly IBrowserSessionFactory _browserSessionFactory;
@@ -40,10 +38,102 @@ public sealed class PagePool : IPagePool
         _logger = logger;
         _browserSessionFactory = browserSessionFactory;
         _availableSlots = CreateChannel(_options.PoolSize);
-        RegisterMetrics();
     }
 
-    public async ValueTask<PageLease> AcquireAsync(CancellationToken cancellationToken = default)
+    public async ValueTask WithPage(
+        Action<IPage> operation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+
+        await ExecuteCoreAsync(
+                (page, _) =>
+                {
+                    operation(page);
+                    return ValueTask.CompletedTask;
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask WithPage(
+        Func<IPage, ValueTask> operation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+
+        await ExecuteCoreAsync(
+                async (page, _) =>
+                {
+                    await operation(page).ConfigureAwait(false);
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public ValueTask<TResult> WithPage<TResult>(
+        Func<IPage, TResult> operation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return ExecuteCoreWithResultAsync((page, _) => ValueTask.FromResult(operation(page)), cancellationToken);
+    }
+
+    public ValueTask<TResult> WithPage<TResult>(
+        Func<IPage, ValueTask<TResult>> operation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return ExecuteCoreWithResultAsync((page, _) => operation(page), cancellationToken);
+    }
+
+    private async ValueTask ExecuteCoreAsync(
+        Func<IPage, CancellationToken, ValueTask> operation,
+        CancellationToken cancellationToken)
+    {
+        var pageSlot = await AcquirePageSlotAsync(cancellationToken).ConfigureAwait(false);
+        var page = pageSlot.PageSession.Page;
+        var shouldRecycle = false;
+
+        try
+        {
+            await operation(page, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            shouldRecycle = true;
+            throw;
+        }
+        finally
+        {
+            await ReleaseAsync(pageSlot, shouldRecycle || page.IsClosed).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<TResult> ExecuteCoreWithResultAsync<TResult>(
+        Func<IPage, CancellationToken, ValueTask<TResult>> operation,
+        CancellationToken cancellationToken)
+    {
+        var pageSlot = await AcquirePageSlotAsync(cancellationToken).ConfigureAwait(false);
+        var page = pageSlot.PageSession.Page;
+        var shouldRecycle = false;
+
+        try
+        {
+            return await operation(page, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            shouldRecycle = true;
+            throw;
+        }
+        finally
+        {
+            await ReleaseAsync(pageSlot, shouldRecycle || page.IsClosed).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<PageSlot> AcquirePageSlotAsync(CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
@@ -53,10 +143,8 @@ public sealed class PagePool : IPagePool
             throw new PagePoolDisposedException();
         }
 
-        var started = Stopwatch.GetTimestamp();
         Interlocked.Increment(ref _waitingRequests);
 
-        using var activity = PagePoolDiagnostics.ActivitySource.StartActivity("pagepool.acquire");
         using var timeoutCancellationSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCancellationSource.CancelAfter(_options.AcquireTimeout);
 
@@ -91,12 +179,10 @@ public sealed class PagePool : IPagePool
                 try
                 {
                     await pageSlot.PageSession.PrepareForLeaseAsync(_options, timeoutCancellationSource.Token).ConfigureAwait(false);
-                    pageSlot.ConsecutiveFailures = 0;
-                    return new PageLease(pageSlot.PageSession.Page, unhealthy => ReleaseAsync(pageSlot, unhealthy));
+                    return pageSlot;
                 }
                 catch (Exception exception)
                 {
-                    pageSlot.ConsecutiveFailures++;
                     await ReleaseAsync(pageSlot, true).ConfigureAwait(false);
                     _logger.LogWarning(exception, "Page preparation failed.");
                 }
@@ -105,8 +191,6 @@ public sealed class PagePool : IPagePool
         finally
         {
             Interlocked.Decrement(ref _waitingRequests);
-            var elapsed = Stopwatch.GetElapsedTime(started);
-            activity?.SetTag("pagepool.wait_ms", elapsed.TotalMilliseconds);
         }
     }
 
@@ -123,6 +207,18 @@ public sealed class PagePool : IPagePool
             _acceptingLeases && !_disposed,
             Volatile.Read(ref _replacementCount),
             Volatile.Read(ref _browserRestartCount)));
+    }
+
+    internal async ValueTask<bool> IsBrowserHealthyAsync(CancellationToken cancellationToken)
+    {
+        if (_browserSession is null || !_browserSession.IsConnected)
+        {
+            return false;
+        }
+
+        return await _browserSession
+            .IsResponsiveAsync(_options.BrowserHealthCheckTimeout, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     internal async Task StartAsync(CancellationToken cancellationToken)
@@ -217,7 +313,6 @@ public sealed class PagePool : IPagePool
 
     private async ValueTask ReleaseAsync(PageSlot pageSlot, bool unhealthy)
     {
-        var activity = PagePoolDiagnostics.ActivitySource.StartActivity("pagepool.release");
         pageSlot.State = unhealthy ? PageSlotState.Unhealthy : PageSlotState.Resetting;
         var currentGeneration = Volatile.Read(ref _generation);
         var recyclePage = unhealthy || pageSlot.PageSession.IsClosed || pageSlot.Generation != currentGeneration || pageSlot.UseCount + 1 >= _options.MaxPageUses;
@@ -237,7 +332,6 @@ public sealed class PagePool : IPagePool
         }
         catch (Exception exception)
         {
-            pageSlot.ConsecutiveFailures++;
             _logger.LogWarning(exception, "Page recycle failed.");
             await ReplaceAsync(pageSlot).ConfigureAwait(false);
         }
@@ -247,8 +341,6 @@ public sealed class PagePool : IPagePool
             {
                 _drainedTcs.TrySetResult();
             }
-
-            activity?.Dispose();
         }
     }
 
@@ -285,7 +377,7 @@ public sealed class PagePool : IPagePool
 
         try
         {
-            var replacement = await CreatePageSlotAsync(Volatile.Read(ref _generation), CancellationToken.None).ConfigureAwait(false);
+            var replacement = await CreatePageSlotAsync(_browserSession, Volatile.Read(ref _generation), CancellationToken.None).ConfigureAwait(false);
             await EnqueueAsync(replacement).ConfigureAwait(false);
             Interlocked.Increment(ref _replacementCount);
         }
@@ -294,24 +386,6 @@ public sealed class PagePool : IPagePool
             _logger.LogError(exception, "Page replacement failed.");
             await StartRebuildAsync(CancellationToken.None).ConfigureAwait(false);
         }
-    }
-
-    private async Task<PageSlot> CreatePageSlotAsync(int generation, CancellationToken cancellationToken)
-    {
-        if (_browserSession is null)
-        {
-            throw new PagePoolUnavailableException("Browser session is not available.");
-        }
-
-        var pageSession = await _browserSession.CreatePageAsync(cancellationToken).ConfigureAwait(false);
-        await pageSession.InitializeAsync(_options, cancellationToken).ConfigureAwait(false);
-
-        return new PageSlot
-        {
-            Generation = generation,
-            PageSession = pageSession,
-            State = PageSlotState.Warm
-        };
     }
 
     private async Task BuildBrowserStateAsync(CancellationToken cancellationToken)
@@ -449,7 +523,7 @@ public sealed class PagePool : IPagePool
 
     private void OnBrowserDisconnected(object? sender, EventArgs eventArgs)
     {
-        _ = StartRebuildAsync(CancellationToken.None);
+        _ = HandleBrowserDisconnectedAsync();
     }
 
     private void ThrowIfDisposed()
@@ -460,15 +534,6 @@ public sealed class PagePool : IPagePool
         }
     }
 
-    private void RegisterMetrics()
-    {
-        PagePoolDiagnostics.Meter.CreateObservableGauge("puppeteer_page_pool.available_pages", () => Volatile.Read(ref _availablePages));
-        PagePoolDiagnostics.Meter.CreateObservableGauge("puppeteer_page_pool.leased_pages", () => Volatile.Read(ref _leasedPages));
-        PagePoolDiagnostics.Meter.CreateObservableGauge("puppeteer_page_pool.waiting_requests", () => Volatile.Read(ref _waitingRequests));
-        PagePoolDiagnostics.Meter.CreateObservableCounter("puppeteer_page_pool.replacements", () => Volatile.Read(ref _replacementCount));
-        PagePoolDiagnostics.Meter.CreateObservableCounter("puppeteer_page_pool.browser_restarts", () => Volatile.Read(ref _browserRestartCount));
-    }
-
     private void ResetDrainedSignal()
     {
         if (!_drainedTcs.Task.IsCompleted)
@@ -477,5 +542,17 @@ public sealed class PagePool : IPagePool
         }
 
         Interlocked.CompareExchange(ref _drainedTcs, CreateDrainedTcs(), _drainedTcs);
+    }
+
+    private async Task HandleBrowserDisconnectedAsync()
+    {
+        try
+        {
+            await StartRebuildAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Browser rebuild failed after disconnection.");
+        }
     }
 }

@@ -41,13 +41,18 @@ public sealed class PagePoolTests
         Assert.Equal(2, initial.AvailablePages);
         Assert.Equal(0, initial.LeasedPages);
 
-        await using (var lease = await pool.AcquireAsync())
-        {
-            var during = await pool.GetSnapshotAsync();
+        await pool.WithPage(
+            async page =>
+            {
+                await Task.Yield();
 
-            Assert.Equal(1, during.AvailablePages);
-            Assert.Equal(1, during.LeasedPages);
-        }
+                var during = await pool.GetSnapshotAsync();
+
+                Assert.Equal(1, during.AvailablePages);
+                Assert.Equal(1, during.LeasedPages);
+                Assert.NotNull(page);
+            })
+            ;
 
         var final = await pool.GetSnapshotAsync();
 
@@ -57,20 +62,16 @@ public sealed class PagePoolTests
     }
 
     [Fact]
-    public async Task PageLease_dispose_is_idempotent()
+    public async Task Execute_async_returns_callback_result()
     {
-        var page = Substitute.For<IPage>();
-        var calls = 0;
-        var lease = new PageLease(page, _ =>
-        {
-            calls++;
-            return ValueTask.CompletedTask;
-        });
+        var harness = new PoolHarness(poolSize: 1);
+        await using var pool = harness.CreatePool();
 
-        await lease.DisposeAsync();
-        await lease.DisposeAsync();
+        await pool.StartAsync(CancellationToken.None);
 
-        Assert.Equal(1, calls);
+        var result = await pool.WithPage(page => page);
+
+        Assert.NotNull(result);
     }
 
     [Fact]
@@ -81,11 +82,14 @@ public sealed class PagePoolTests
 
         await pool.StartAsync(CancellationToken.None);
 
-        var lease = await pool.AcquireAsync();
+        var releaseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = pool.WithPage(_ => new ValueTask(releaseGate.Task));
 
-        await Assert.ThrowsAsync<PagePoolAcquireTimeoutException>(() => pool.AcquireAsync().AsTask());
+        await Assert.ThrowsAsync<PagePoolAcquireTimeoutException>(
+            () => pool.WithPage(_ => ValueTask.CompletedTask).AsTask());
 
-        await lease.DisposeAsync();
+        releaseGate.TrySetResult();
+        await inFlight;
     }
 
     [Fact]
@@ -96,9 +100,8 @@ public sealed class PagePoolTests
 
         await pool.StartAsync(CancellationToken.None);
 
-        await using var lease = await pool.AcquireAsync();
-        lease.MarkUnhealthy();
-        await lease.DisposeAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => pool.WithPage(_ => throw new InvalidOperationException("Simulated operation failure.")).AsTask());
 
         var snapshot = await pool.GetSnapshotAsync();
 
@@ -123,14 +126,16 @@ public sealed class PagePoolTests
 
         async Task WorkerAsync()
         {
-            await using var lease = await pool.AcquireAsync();
+            await pool.WithPage(
+                async _ =>
+                {
+                    if (Interlocked.Increment(ref acquiredCount) == 2)
+                    {
+                        firstWaveReady.TrySetResult();
+                    }
 
-            if (Interlocked.Increment(ref acquiredCount) == 2)
-            {
-                firstWaveReady.TrySetResult();
-            }
-
-            await releaseGate.Task.ConfigureAwait(false);
+                    await releaseGate.Task.ConfigureAwait(false);
+                });
         }
 
         var workers = Enumerable.Range(0, 4).Select(_ => WorkerAsync()).ToArray();
@@ -161,16 +166,52 @@ public sealed class PagePoolTests
 
         await pool.StartAsync(CancellationToken.None);
 
-        var lease = await pool.AcquireAsync();
+        var releaseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = pool.WithPage(_ => new ValueTask(releaseGate.Task));
         var stopTask = pool.StopAsync(CancellationToken.None);
 
         await Task.Delay(25);
 
         Assert.False(stopTask.IsCompleted);
-        await Assert.ThrowsAsync<PagePoolDisposedException>(() => pool.AcquireAsync().AsTask());
+        await Assert.ThrowsAsync<PagePoolDisposedException>(
+            () => pool.WithPage(_ => ValueTask.CompletedTask).AsTask());
 
-        await lease.DisposeAsync();
+        releaseGate.TrySetResult();
+        await inFlight;
         await stopTask;
+    }
+
+    [Fact]
+    public async Task Browser_health_check_detects_unresponsive_browser()
+    {
+        var harness = new PoolHarness(poolSize: 1);
+        harness.Session.IsResponsive = false;
+        await using var pool = harness.CreatePool();
+
+        await pool.StartAsync(CancellationToken.None);
+
+        var healthy = await pool.IsBrowserHealthyAsync(CancellationToken.None);
+
+        Assert.False(healthy);
+    }
+
+    [Fact]
+    public async Task Invalid_page_health_triggers_replacement_before_lease()
+    {
+        var harness = new PoolHarness(poolSize: 1);
+        await using var pool = harness.CreatePool();
+
+        await pool.StartAsync(CancellationToken.None);
+        harness.Session.Pages[0].ReadyState = "loading";
+
+        await pool.WithPage(page => page);
+
+        var snapshot = await pool.GetSnapshotAsync();
+
+        Assert.Equal(1, snapshot.ReplacementCount);
+        Assert.Equal(2, harness.Session.TotalPageCount);
+        Assert.Equal(1, harness.Session.DisposedPageCount);
+        Assert.Equal(0, snapshot.LeasedPages);
     }
 
     public static IEnumerable<object[]> InvalidOptionScenarios()
@@ -220,6 +261,24 @@ public sealed class PagePoolTests
             }),
             typeof(ArgumentException)
         ];
+
+        yield return
+        [
+            (Action<PuppeteerPagePoolOptions>)(options => options.BrowserHealthCheckTimeout = TimeSpan.Zero),
+            typeof(ArgumentOutOfRangeException)
+        ];
+
+        yield return
+        [
+            (Action<PuppeteerPagePoolOptions>)(options => options.ResetNavigationTimeout = TimeSpan.Zero),
+            typeof(ArgumentOutOfRangeException)
+        ];
+
+        yield return
+        [
+            (Action<PuppeteerPagePoolOptions>)(options => options.ResetWaitUntil = []),
+            typeof(ArgumentException)
+        ];
     }
 
     private sealed class PoolHarness(int poolSize, TimeSpan? acquireTimeout = null)
@@ -258,6 +317,8 @@ public sealed class PagePoolTests
 
         public bool IsConnected { get; private set; } = true;
 
+        public bool IsResponsive { get; set; } = true;
+
         public event EventHandler? Disconnected;
 
         public IReadOnlyList<TestPageSession> Pages => _pages;
@@ -273,6 +334,12 @@ public sealed class PagePoolTests
             var page = new TestPageSession();
             _pages.Add(page);
             return ValueTask.FromResult<IPageSession>(page);
+        }
+
+        public ValueTask<bool> IsResponsiveAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(IsConnected && IsResponsive);
         }
 
         public ValueTask DisposeAsync()
@@ -294,6 +361,8 @@ public sealed class PagePoolTests
 
         public bool IsClosed { get; private set; }
 
+        public string ReadyState { get; set; } = "complete";
+
         public int InitializeCount { get; private set; }
 
         public int PrepareCount { get; private set; }
@@ -311,6 +380,12 @@ public sealed class PagePoolTests
         public ValueTask PrepareForLeaseAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
         {
             PrepareCount++;
+
+            if (options.ValidatePageHealthBeforeLease && ReadyState is not ("complete" or "interactive"))
+            {
+                throw new InvalidOperationException("Invalid ready state.");
+            }
+
             return ValueTask.CompletedTask;
         }
 

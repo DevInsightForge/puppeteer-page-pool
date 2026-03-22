@@ -5,7 +5,7 @@
     <PackageId>PuppeteerPagePool</PackageId>
     <AssemblyName>PuppeteerPagePool</AssemblyName>
     <RootNamespace>PuppeteerPagePool</RootNamespace>
-    <Description>High-performance pooled page leasing for PuppeteerSharp with DI, health checks, and diagnostics.</Description>
+    <Description>High-performance pooled page leasing for PuppeteerSharp with DI and health checks.</Description>
     <PackageTags>puppeteer puppeteersharp browser automation pooling performance pdf rendering</PackageTags>
     <Authors>imzihad21</Authors>
     <PackageReadmeFile>README.md</PackageReadmeFile>

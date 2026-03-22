@@ -62,6 +62,8 @@ internal sealed class FakeBrowserSession : IBrowserSession
 
     public List<FakePageSession> Pages { get; } = [];
 
+    public bool IsResponsive { get; set; } = true;
+
     public ValueTask<IPageSession> CreatePageAsync(CancellationToken cancellationToken)
     {
         if (!IsConnected)
@@ -78,6 +80,12 @@ internal sealed class FakeBrowserSession : IBrowserSession
         var page = new FakePageSession();
         Pages.Add(page);
         return ValueTask.FromResult<IPageSession>(page);
+    }
+
+    public ValueTask<bool> IsResponsiveAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(IsConnected && IsResponsive);
     }
 
     public void TriggerDisconnected()
@@ -114,6 +122,10 @@ internal sealed class FakePageSession : IPageSession
 
     public int DisposeCount { get; private set; }
 
+    public int JavaScriptToggleCount { get; private set; }
+
+    public string ReadyState { get; set; } = "complete";
+
     public Func<PuppeteerPagePoolOptions, CancellationToken, ValueTask>? OnInitializeAsync { get; set; }
 
     public Func<PuppeteerPagePoolOptions, CancellationToken, ValueTask>? OnPrepareAsync { get; set; }
@@ -123,18 +135,27 @@ internal sealed class FakePageSession : IPageSession
     public ValueTask InitializeAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
     {
         InitializeCount++;
+        JavaScriptToggleCount++;
         return OnInitializeAsync is null ? ValueTask.CompletedTask : OnInitializeAsync(options, cancellationToken);
     }
 
     public ValueTask PrepareForLeaseAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
     {
         PrepareCount++;
+
+        if (options.ValidatePageHealthBeforeLease && ReadyState is not ("complete" or "interactive"))
+        {
+            throw new InvalidOperationException("Invalid ready state.");
+        }
+
         return OnPrepareAsync is null ? ValueTask.CompletedTask : OnPrepareAsync(options, cancellationToken);
     }
 
     public ValueTask ResetAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
     {
         ResetCount++;
+        JavaScriptToggleCount++;
+        ReadyState = "complete";
         return OnResetAsync is null ? ValueTask.CompletedTask : OnResetAsync(options, cancellationToken);
     }
 

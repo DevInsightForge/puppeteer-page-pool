@@ -6,9 +6,10 @@ internal sealed class PagePoolHostedService : IHostedService
 {
     private readonly PagePool _pagePool;
 
-    public PagePoolHostedService(PagePool pagePool)
+    public PagePoolHostedService(IPagePool pagePool)
     {
-        _pagePool = pagePool;
+        _pagePool = pagePool as PagePool
+            ?? throw new InvalidOperationException($"Registered {nameof(IPagePool)} implementation must be {nameof(PagePool)}.");
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
