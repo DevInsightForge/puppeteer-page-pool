@@ -3,7 +3,7 @@ namespace PuppeteerPagePool;
 /// <summary>
 /// Stable connection configuration used by the pool for remote browser attachment.
 /// </summary>
-public sealed class PagePoolConnectSettings
+public sealed class PagePoolConnectOptions
 {
     /// <summary>
     /// Browser WebSocket endpoint.

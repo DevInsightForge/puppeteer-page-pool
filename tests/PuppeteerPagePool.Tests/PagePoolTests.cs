@@ -10,9 +10,9 @@ public sealed class PagePoolTests
 {
     [Theory]
     [MemberData(nameof(InvalidOptionScenarios))]
-    public void Options_validation_rejects_invalid_configuration(Action<PuppeteerPagePoolOptions> mutate, Type exceptionType)
+    public void Options_validation_rejects_invalid_configuration(Action<PagePoolOptions> mutate, Type exceptionType)
     {
-        var options = new PuppeteerPagePoolOptions();
+        var options = new PagePoolOptions();
         mutate(options);
 
         var exception = Assert.Throws(exceptionType, options.Validate);
@@ -23,7 +23,7 @@ public sealed class PagePoolTests
     [Fact]
     public void Options_validation_accepts_valid_configuration()
     {
-        var options = new PuppeteerPagePoolOptions();
+        var options = new PagePoolOptions();
 
         options.Validate();
     }
@@ -218,46 +218,46 @@ public sealed class PagePoolTests
     {
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.PoolSize = 0),
+            (Action<PagePoolOptions>)(options => options.PoolSize = 0),
             typeof(ArgumentOutOfRangeException)
         ];
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.AcquireTimeout = TimeSpan.Zero),
+            (Action<PagePoolOptions>)(options => options.AcquireTimeout = TimeSpan.Zero),
             typeof(ArgumentOutOfRangeException)
         ];
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.ShutdownTimeout = TimeSpan.Zero),
+            (Action<PagePoolOptions>)(options => options.ShutdownTimeout = TimeSpan.Zero),
             typeof(ArgumentOutOfRangeException)
         ];
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.ResetTargetUrl = "not-a-uri"),
+            (Action<PagePoolOptions>)(options => options.ResetTargetUrl = "not-a-uri"),
             typeof(ArgumentException)
         ];
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.MaxPageUses = 0),
+            (Action<PagePoolOptions>)(options => options.MaxPageUses = 0),
             typeof(ArgumentOutOfRangeException)
         ];
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.MaxConsecutiveFailures = 0),
+            (Action<PagePoolOptions>)(options => options.MaxConsecutiveLeaseFailures = 0),
             typeof(ArgumentOutOfRangeException)
         ];
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options =>
+            (Action<PagePoolOptions>)(options =>
             {
-                options.LaunchSettings = new PagePoolLaunchSettings();
-                options.ConnectSettings = new PagePoolConnectSettings
+                options.LaunchOptions = new PagePoolLaunchOptions();
+                options.ConnectOptions = new PagePoolConnectOptions
                 {
                     BrowserWebSocketEndpoint = "ws://127.0.0.1:3000"
                 };
@@ -267,19 +267,19 @@ public sealed class PagePoolTests
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.BrowserHealthCheckTimeout = TimeSpan.Zero),
+            (Action<PagePoolOptions>)(options => options.BrowserHealthCheckTimeout = TimeSpan.Zero),
             typeof(ArgumentOutOfRangeException)
         ];
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.ResetNavigationTimeout = TimeSpan.Zero),
+            (Action<PagePoolOptions>)(options => options.ResetNavigationTimeout = TimeSpan.Zero),
             typeof(ArgumentOutOfRangeException)
         ];
 
         yield return
         [
-            (Action<PuppeteerPagePoolOptions>)(options => options.ResetWaitUntil = []),
+            (Action<PagePoolOptions>)(options => options.ResetWaitConditions = []),
             typeof(ArgumentException)
         ];
     }
@@ -292,7 +292,7 @@ public sealed class PagePoolTests
 
         public PagePool CreatePool()
         {
-            var options = new PuppeteerPagePoolOptions
+            var options = new PagePoolOptions
             {
                 PoolSize = poolSize,
                 AcquireTimeout = acquireTimeout ?? TimeSpan.FromSeconds(1),
@@ -308,7 +308,7 @@ public sealed class PagePoolTests
     {
         public TestBrowserSession Session { get; } = new();
 
-        public ValueTask<IBrowserSession> CreateAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+        public ValueTask<IBrowserSession> CreateAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
             return ValueTask.FromResult<IBrowserSession>(Session);
         }
@@ -374,13 +374,13 @@ public sealed class PagePoolTests
 
         public int DisposedCount { get; private set; }
 
-        public ValueTask InitializeAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+        public ValueTask InitializeAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
             InitializeCount++;
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask PrepareForLeaseAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+        public ValueTask PrepareForLeaseAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
             PrepareCount++;
 
@@ -392,7 +392,7 @@ public sealed class PagePoolTests
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask ResetAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+        public ValueTask ResetAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
             ResetCount++;
             return ValueTask.CompletedTask;

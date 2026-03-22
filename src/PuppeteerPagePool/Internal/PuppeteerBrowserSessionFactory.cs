@@ -26,16 +26,16 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
         "--disable-features=TranslateUI,ImprovedCookieControls,AudioServiceOutOfProcess,SitePerProcess"
     ];
 
-    public async ValueTask<IBrowserSession> CreateAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+    public async ValueTask<IBrowserSession> CreateAsync(PagePoolOptions options, CancellationToken cancellationToken)
     {
-        if (options.ConnectSettings is not null)
+        if (options.ConnectOptions is not null)
         {
-            var connectedBrowser = await Puppeteer.ConnectAsync(ToConnectOptions(options.ConnectSettings)).ConfigureAwait(false);
+            var connectedBrowser = await Puppeteer.ConnectAsync(ToConnectOptions(options.ConnectOptions)).ConfigureAwait(false);
             return new PuppeteerBrowserSession(connectedBrowser);
         }
 
-        var launchOptions = ToLaunchOptions(options.LaunchSettings);
-        SetConfiguredExecutablePath(options, launchOptions);
+        var launchOptions = ToLaunchOptions(options.LaunchOptions);
+        ApplyConfiguredExecutablePath(options, launchOptions);
 
         if (string.IsNullOrWhiteSpace(launchOptions.ExecutablePath))
         {
@@ -69,9 +69,9 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
         return new PuppeteerBrowserSession(launchedBrowser);
     }
 
-    private static LaunchOptions ToLaunchOptions(PagePoolLaunchSettings? settings)
+    private static LaunchOptions ToLaunchOptions(PagePoolLaunchOptions? options)
     {
-        if (settings is null)
+        if (options is null)
         {
             return new LaunchOptions
             {
@@ -82,19 +82,19 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 
         return new LaunchOptions
         {
-            Headless = settings.Headless,
-            Timeout = settings.TimeoutMilliseconds,
-            Args = settings.Args.Length == 0 ? [.. DefaultLaunchArguments] : [.. settings.Args]
+            Headless = options.Headless,
+            Timeout = options.TimeoutMilliseconds,
+            Args = options.Args.Length == 0 ? [.. DefaultLaunchArguments] : [.. options.Args]
         };
     }
 
-    private static ConnectOptions ToConnectOptions(PagePoolConnectSettings settings)
+    private static ConnectOptions ToConnectOptions(PagePoolConnectOptions options)
     {
         return new ConnectOptions
         {
-            BrowserWSEndpoint = settings.BrowserWebSocketEndpoint,
-            BrowserURL = settings.BrowserUrl,
-            SlowMo = settings.SlowMoMilliseconds
+            BrowserWSEndpoint = options.BrowserWebSocketEndpoint,
+            BrowserURL = options.BrowserUrl,
+            SlowMo = options.SlowMoMilliseconds
         };
     }
 
@@ -109,32 +109,32 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
         };
     }
 
-    private static WaitUntilNavigation[] ToWaitUntilNavigation(PagePoolNavigationWaitUntil[] values)
+    private static WaitUntilNavigation[] ToWaitUntilNavigation(PagePoolNavigationWaitUntil[] waitConditions)
     {
-        var waitUntil = new WaitUntilNavigation[values.Length];
-        for (var index = 0; index < values.Length; index++)
+        var waitUntil = new WaitUntilNavigation[waitConditions.Length];
+        for (var index = 0; index < waitConditions.Length; index++)
         {
-            waitUntil[index] = values[index] switch
+            waitUntil[index] = waitConditions[index] switch
             {
                 PagePoolNavigationWaitUntil.Load => WaitUntilNavigation.Load,
                 PagePoolNavigationWaitUntil.DOMContentLoaded => WaitUntilNavigation.DOMContentLoaded,
                 PagePoolNavigationWaitUntil.Networkidle0 => WaitUntilNavigation.Networkidle0,
                 PagePoolNavigationWaitUntil.Networkidle2 => WaitUntilNavigation.Networkidle2,
-                _ => throw new ArgumentOutOfRangeException(nameof(values))
+                _ => throw new ArgumentOutOfRangeException(nameof(waitConditions))
             };
         }
 
         return waitUntil;
     }
 
-    private static void SetConfiguredExecutablePath(PuppeteerPagePoolOptions options, LaunchOptions launchOptions)
+    private static void ApplyConfiguredExecutablePath(PagePoolOptions options, LaunchOptions launchOptions)
     {
-        if (string.IsNullOrWhiteSpace(options.BrowserExecutablePath))
+        if (string.IsNullOrWhiteSpace(options.ExecutablePath))
         {
             return;
         }
 
-        var executablePath = options.BrowserExecutablePath;
+        var executablePath = options.ExecutablePath;
         if (!File.Exists(executablePath))
         {
             throw new PagePoolUnavailableException($"Browser executable path does not exist: {executablePath}");
@@ -295,7 +295,7 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 
         public bool IsClosed => _page.IsClosed;
 
-        public async ValueTask InitializeAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+        public async ValueTask InitializeAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
             await _page.SetJavaScriptEnabledAsync(options.JavaScriptEnabled).ConfigureAwait(false);
 
@@ -307,7 +307,7 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
             await ResetAsync(options, cancellationToken).ConfigureAwait(false);
         }
 
-        public async ValueTask PrepareForLeaseAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+        public async ValueTask PrepareForLeaseAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
             if (options.ValidatePageHealthBeforeLease)
             {
@@ -320,11 +320,11 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
             }
         }
 
-        public async ValueTask ResetAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+        public async ValueTask ResetAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
             await _page.GoToAsync(options.ResetTargetUrl, new NavigationOptions
             {
-                WaitUntil = ToWaitUntilNavigation(options.ResetWaitUntil),
+                WaitUntil = ToWaitUntilNavigation(options.ResetWaitConditions),
                 Timeout = (int)options.ResetNavigationTimeout.TotalMilliseconds
             }).ConfigureAwait(false);
 

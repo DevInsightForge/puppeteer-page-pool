@@ -22,7 +22,7 @@ using PuppeteerPagePool.DependencyInjection;
 
 var services = new ServiceCollection();
 
-services.AddPuppeteerPagePool(options =>
+services.AddPagePool(options =>
 {
     options.PoolSize = 4;
     options.ResetTargetUrl = "about:blank";
@@ -42,7 +42,7 @@ await pool.WithPage(async page =>
 Register the pool once during startup:
 
 ```csharp
-services.AddPuppeteerPagePool(options =>
+services.AddPagePool(options =>
 {
     options.PoolSize = 4;
     options.AcquireTimeout = TimeSpan.FromSeconds(30);
@@ -59,15 +59,15 @@ services.AddHealthChecks().AddPagePoolHealthCheck();
 Use a preinstalled browser executable:
 
 ```csharp
-services.AddPuppeteerPagePool(options =>
+services.AddPagePool(options =>
 {
     options.Browser = PagePoolBrowser.Chrome;
-    options.BrowserExecutablePath = @"C:\Program Files\Google\Chrome\Application\chrome.exe";
+    options.ExecutablePath = @"C:\Program Files\Google\Chrome\Application\chrome.exe";
     options.EnsureBrowserDownloaded = false;
 });
 ```
 
-When `BrowserExecutablePath` is provided, the pool validates that path and browser family before launch and fails fast on mismatch.
+When `ExecutablePath` is provided, the pool validates that path and browser family before launch and fails fast on mismatch.
 
 ## Core API
 
@@ -83,7 +83,7 @@ ValueTask<PagePoolHealthSnapshot> GetSnapshotAsync(CancellationToken cancellatio
 
 ## Options reference
 
-`PuppeteerPagePoolOptions` controls pool size, lifecycle behavior, and reset policy:
+`PagePoolOptions` controls pool size, lifecycle behavior, and reset policy:
 
 - `PoolSize`: Maximum concurrent leased pages.
 - `AcquireTimeout`: Maximum wait time for a free page.
@@ -98,13 +98,13 @@ ValueTask<PagePoolHealthSnapshot> GetSnapshotAsync(CancellationToken cancellatio
 - `EnsureBrowserDownloaded`: Downloads browser binary when needed.
 - `Browser`: Browser type used by pool config (`PagePoolBrowser`).
 - `BrowserBuildId`: Optional pinned browser build id.
-- `BrowserExecutablePath`: Forces use of a specific browser executable path.
+- `ExecutablePath`: Forces use of a specific browser executable path.
 - `BrowserCachePath`: Optional location for downloaded browser binaries.
 - `BrowserHealthCheckTimeout`: Timeout for browser responsiveness checks.
 - `ResetNavigationTimeout`: Navigation timeout during reset.
-- `ResetWaitUntil`: Navigation completion criteria (`PagePoolNavigationWaitUntil[]`).
-- `LaunchSettings`: Local launch configuration (`PagePoolLaunchSettings`).
-- `ConnectSettings`: Remote browser configuration (`PagePoolConnectSettings`).
+- `ResetWaitConditions`: Navigation completion criteria (`PagePoolNavigationWaitUntil[]`).
+- `LaunchOptions`: Local launch configuration (`PagePoolLaunchOptions`).
+- `ConnectOptions`: Remote browser configuration (`PagePoolConnectOptions`).
 - `ConfigurePageAsync`: Per-page initialization callback.
 - `BeforeLeaseAsync`: Callback invoked before each lease.
 
@@ -131,6 +131,6 @@ ValueTask<PagePoolHealthSnapshot> GetSnapshotAsync(CancellationToken cancellatio
 
 - Keep callbacks short and focused to reduce queue wait time.
 - Reuse one `IPagePool` singleton per app process.
-- Prefer `ConnectSettings` for remote browser fleets and `LaunchSettings` for local managed browsers.
-- When `BrowserExecutablePath` is set, the pool uses that executable only and fails fast if the file is missing, not loadable, or browser type does not match `Browser`.
+- Prefer `ConnectOptions` for remote browser fleets and `LaunchOptions` for local managed browsers.
+- When `ExecutablePath` is set, the pool uses that executable only and fails fast if the file is missing, not loadable, or browser type does not match `Browser`.
 - Use `ResetTargetUrl` that is fast and deterministic for your workload.

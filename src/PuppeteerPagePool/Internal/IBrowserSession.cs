@@ -19,14 +19,14 @@ internal interface IPageSession : IAsyncDisposable
 
     bool IsClosed { get; }
 
-    ValueTask InitializeAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken);
+    ValueTask InitializeAsync(PagePoolOptions options, CancellationToken cancellationToken);
 
-    ValueTask PrepareForLeaseAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken);
+    ValueTask PrepareForLeaseAsync(PagePoolOptions options, CancellationToken cancellationToken);
 
-    ValueTask ResetAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken);
+    ValueTask ResetAsync(PagePoolOptions options, CancellationToken cancellationToken);
 }
 
 internal interface IBrowserSessionFactory
 {
-    ValueTask<IBrowserSession> CreateAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken);
+    ValueTask<IBrowserSession> CreateAsync(PagePoolOptions options, CancellationToken cancellationToken);
 }

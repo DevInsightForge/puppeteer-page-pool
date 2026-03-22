@@ -3,7 +3,7 @@ namespace PuppeteerPagePool;
 /// <summary>
 /// Stable launch configuration used by the pool for local browser startup.
 /// </summary>
-public sealed class PagePoolLaunchSettings
+public sealed class PagePoolLaunchOptions
 {
     /// <summary>
     /// Runs browser without visible UI when <see langword="true"/>.

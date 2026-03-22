@@ -10,10 +10,10 @@ internal static class TestPagePoolFactory
 {
     public static PagePool Create(
         FakeBrowserSessionFactory? browserSessionFactory = null,
-        PuppeteerPagePoolOptions? options = null)
+        PagePoolOptions? options = null)
     {
         return new PagePool(
-            Options.Create(options ?? new PuppeteerPagePoolOptions
+            Options.Create(options ?? new PagePoolOptions
             {
                 PoolSize = 1,
                 AcquireTimeout = TimeSpan.FromMilliseconds(100),
@@ -37,7 +37,7 @@ internal sealed class FakeBrowserSessionFactory : IBrowserSessionFactory
         _preparedSessions.Enqueue(session);
     }
 
-    public ValueTask<IBrowserSession> CreateAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+    public ValueTask<IBrowserSession> CreateAsync(PagePoolOptions options, CancellationToken cancellationToken)
     {
         CreateCount++;
         var session = _preparedSessions.Count > 0 ? _preparedSessions.Dequeue() : new FakeBrowserSession(options.PoolSize * 4);
@@ -126,20 +126,20 @@ internal sealed class FakePageSession : IPageSession
 
     public string ReadyState { get; set; } = "complete";
 
-    public Func<PuppeteerPagePoolOptions, CancellationToken, ValueTask>? OnInitializeAsync { get; set; }
+    public Func<PagePoolOptions, CancellationToken, ValueTask>? OnInitializeAsync { get; set; }
 
-    public Func<PuppeteerPagePoolOptions, CancellationToken, ValueTask>? OnPrepareAsync { get; set; }
+    public Func<PagePoolOptions, CancellationToken, ValueTask>? OnPrepareAsync { get; set; }
 
-    public Func<PuppeteerPagePoolOptions, CancellationToken, ValueTask>? OnResetAsync { get; set; }
+    public Func<PagePoolOptions, CancellationToken, ValueTask>? OnResetAsync { get; set; }
 
-    public ValueTask InitializeAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+    public ValueTask InitializeAsync(PagePoolOptions options, CancellationToken cancellationToken)
     {
         InitializeCount++;
         JavaScriptToggleCount++;
         return OnInitializeAsync is null ? ValueTask.CompletedTask : OnInitializeAsync(options, cancellationToken);
     }
 
-    public ValueTask PrepareForLeaseAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+    public ValueTask PrepareForLeaseAsync(PagePoolOptions options, CancellationToken cancellationToken)
     {
         PrepareCount++;
 
@@ -151,7 +151,7 @@ internal sealed class FakePageSession : IPageSession
         return OnPrepareAsync is null ? ValueTask.CompletedTask : OnPrepareAsync(options, cancellationToken);
     }
 
-    public ValueTask ResetAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
+    public ValueTask ResetAsync(PagePoolOptions options, CancellationToken cancellationToken)
     {
         ResetCount++;
         JavaScriptToggleCount++;

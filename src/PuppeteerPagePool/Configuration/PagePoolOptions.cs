@@ -5,7 +5,7 @@ namespace PuppeteerPagePool;
 /// <summary>
 /// Configures pool behavior, browser lifecycle, and page reset policies.
 /// </summary>
-public sealed class PuppeteerPagePoolOptions
+public sealed class PagePoolOptions
 {
     /// <summary>
     /// Maximum number of pages that can be leased concurrently.
@@ -40,7 +40,7 @@ public sealed class PuppeteerPagePoolOptions
     /// <summary>
     /// Reserved for failure policy compatibility and validation.
     /// </summary>
-    public int MaxConsecutiveFailures { get; set; } = 3;
+    public int MaxConsecutiveLeaseFailures { get; set; } = 3;
 
     /// <summary>
     /// Clears page cookies when a lease completes.
@@ -80,7 +80,7 @@ public sealed class PuppeteerPagePoolOptions
     /// <summary>
     /// Browser executable path that must be used when provided.
     /// </summary>
-    public string? BrowserExecutablePath { get; set; }
+    public string? ExecutablePath { get; set; }
 
     /// <summary>
     /// Optional cache path for downloaded browser binaries.
@@ -100,17 +100,17 @@ public sealed class PuppeteerPagePoolOptions
     /// <summary>
     /// Navigation completion conditions required during reset.
     /// </summary>
-    public PagePoolNavigationWaitUntil[] ResetWaitUntil { get; set; } = [PagePoolNavigationWaitUntil.Load];
+    public PagePoolNavigationWaitUntil[] ResetWaitConditions { get; set; } = [PagePoolNavigationWaitUntil.Load];
 
     /// <summary>
     /// Launch configuration for local browser processes.
     /// </summary>
-    public PagePoolLaunchSettings? LaunchSettings { get; set; }
+    public PagePoolLaunchOptions? LaunchOptions { get; set; }
 
     /// <summary>
     /// Connection configuration for remote browser endpoints.
     /// </summary>
-    public PagePoolConnectSettings? ConnectSettings { get; set; }
+    public PagePoolConnectOptions? ConnectOptions { get; set; }
 
     /// <summary>
     /// Optional callback invoked once for each newly created page before first lease.
@@ -122,9 +122,9 @@ public sealed class PuppeteerPagePoolOptions
     /// </summary>
     public Func<IPage, CancellationToken, ValueTask>? BeforeLeaseAsync { get; set; }
 
-    internal PuppeteerPagePoolOptions Clone()
+    internal PagePoolOptions Clone()
     {
-        return new PuppeteerPagePoolOptions
+        return new PagePoolOptions
         {
             PoolSize = PoolSize,
             AcquireTimeout = AcquireTimeout,
@@ -132,7 +132,7 @@ public sealed class PuppeteerPagePoolOptions
             ShutdownTimeout = ShutdownTimeout,
             ResetTargetUrl = ResetTargetUrl,
             MaxPageUses = MaxPageUses,
-            MaxConsecutiveFailures = MaxConsecutiveFailures,
+            MaxConsecutiveLeaseFailures = MaxConsecutiveLeaseFailures,
             ClearCookiesOnReturn = ClearCookiesOnReturn,
             ClearStorageOnReturn = ClearStorageOnReturn,
             JavaScriptEnabled = JavaScriptEnabled,
@@ -140,27 +140,27 @@ public sealed class PuppeteerPagePoolOptions
             EnsureBrowserDownloaded = EnsureBrowserDownloaded,
             Browser = Browser,
             BrowserBuildId = BrowserBuildId,
-            BrowserExecutablePath = BrowserExecutablePath,
+            ExecutablePath = ExecutablePath,
             BrowserCachePath = BrowserCachePath,
             BrowserHealthCheckTimeout = BrowserHealthCheckTimeout,
             ResetNavigationTimeout = ResetNavigationTimeout,
-            ResetWaitUntil = [.. ResetWaitUntil],
-            LaunchSettings = LaunchSettings is null
+            ResetWaitConditions = [.. ResetWaitConditions],
+            LaunchOptions = LaunchOptions is null
                 ? null
-                : new PagePoolLaunchSettings
+                : new PagePoolLaunchOptions
                 {
-                    Headless = LaunchSettings.Headless,
-                    TimeoutMilliseconds = LaunchSettings.TimeoutMilliseconds,
-                    Args = [.. LaunchSettings.Args]
+                    Headless = LaunchOptions.Headless,
+                    TimeoutMilliseconds = LaunchOptions.TimeoutMilliseconds,
+                    Args = [.. LaunchOptions.Args]
                 },
-            ConnectSettings = ConnectSettings is null
+            ConnectOptions = ConnectOptions is null
                 ? null
-                : new PagePoolConnectSettings
+                : new PagePoolConnectOptions
                 {
-                    BrowserWebSocketEndpoint = ConnectSettings.BrowserWebSocketEndpoint,
-                    BrowserUrl = ConnectSettings.BrowserUrl,
-                    IgnoreHttpsErrors = ConnectSettings.IgnoreHttpsErrors,
-                    SlowMoMilliseconds = ConnectSettings.SlowMoMilliseconds
+                    BrowserWebSocketEndpoint = ConnectOptions.BrowserWebSocketEndpoint,
+                    BrowserUrl = ConnectOptions.BrowserUrl,
+                    IgnoreHttpsErrors = ConnectOptions.IgnoreHttpsErrors,
+                    SlowMoMilliseconds = ConnectOptions.SlowMoMilliseconds
                 },
             ConfigurePageAsync = ConfigurePageAsync,
             BeforeLeaseAsync = BeforeLeaseAsync
@@ -199,14 +199,14 @@ public sealed class PuppeteerPagePoolOptions
             throw new ArgumentOutOfRangeException(nameof(MaxPageUses));
         }
 
-        if (MaxConsecutiveFailures <= 0)
+        if (MaxConsecutiveLeaseFailures <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(MaxConsecutiveFailures));
+            throw new ArgumentOutOfRangeException(nameof(MaxConsecutiveLeaseFailures));
         }
 
-        if (LaunchSettings is not null && ConnectSettings is not null)
+        if (LaunchOptions is not null && ConnectOptions is not null)
         {
-            throw new ArgumentException("LaunchSettings and ConnectSettings cannot both be set.");
+            throw new ArgumentException("LaunchOptions and ConnectOptions cannot both be set.");
         }
 
         if (BrowserHealthCheckTimeout <= TimeSpan.Zero)
@@ -219,38 +219,38 @@ public sealed class PuppeteerPagePoolOptions
             throw new ArgumentOutOfRangeException(nameof(ResetNavigationTimeout));
         }
 
-        if (ResetWaitUntil.Length == 0)
+        if (ResetWaitConditions.Length == 0)
         {
-            throw new ArgumentException("ResetWaitUntil must contain at least one navigation condition.", nameof(ResetWaitUntil));
+            throw new ArgumentException("ResetWaitConditions must contain at least one navigation condition.", nameof(ResetWaitConditions));
         }
 
-        if (LaunchSettings is not null && LaunchSettings.TimeoutMilliseconds < 0)
+        if (LaunchOptions is not null && LaunchOptions.TimeoutMilliseconds < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(LaunchSettings.TimeoutMilliseconds));
+            throw new ArgumentOutOfRangeException(nameof(LaunchOptions.TimeoutMilliseconds));
         }
 
-        if (ConnectSettings is not null &&
-            string.IsNullOrWhiteSpace(ConnectSettings.BrowserWebSocketEndpoint) &&
-            string.IsNullOrWhiteSpace(ConnectSettings.BrowserUrl))
+        if (ConnectOptions is not null &&
+            string.IsNullOrWhiteSpace(ConnectOptions.BrowserWebSocketEndpoint) &&
+            string.IsNullOrWhiteSpace(ConnectOptions.BrowserUrl))
         {
-            throw new ArgumentException("ConnectSettings requires BrowserWebSocketEndpoint or BrowserUrl.", nameof(ConnectSettings));
+            throw new ArgumentException("ConnectOptions requires BrowserWebSocketEndpoint or BrowserUrl.", nameof(ConnectOptions));
         }
 
-        if (ConnectSettings is not null && ConnectSettings.SlowMoMilliseconds < 0)
+        if (ConnectOptions is not null && ConnectOptions.SlowMoMilliseconds < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(ConnectSettings.SlowMoMilliseconds));
+            throw new ArgumentOutOfRangeException(nameof(ConnectOptions.SlowMoMilliseconds));
         }
 
-        if (!string.IsNullOrWhiteSpace(BrowserExecutablePath))
+        if (!string.IsNullOrWhiteSpace(ExecutablePath))
         {
-            if (ConnectSettings is not null)
+            if (ConnectOptions is not null)
             {
-                throw new ArgumentException("BrowserExecutablePath cannot be used with ConnectSettings.", nameof(BrowserExecutablePath));
+                throw new ArgumentException("ExecutablePath cannot be used with ConnectOptions.", nameof(ExecutablePath));
             }
 
             if (!string.IsNullOrWhiteSpace(BrowserBuildId))
             {
-                throw new ArgumentException("BrowserBuildId cannot be used with BrowserExecutablePath.", nameof(BrowserBuildId));
+                throw new ArgumentException("BrowserBuildId cannot be used with ExecutablePath.", nameof(BrowserBuildId));
             }
         }
     }

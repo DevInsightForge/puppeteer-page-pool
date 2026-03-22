@@ -11,14 +11,14 @@ public sealed class PagePoolIntegrationTests
         await using var server = new TestServer();
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddPuppeteerPagePool(options =>
+        services.AddPagePool(options =>
         {
             options.PoolSize = 1;
             options.AcquireTimeout = TimeSpan.FromSeconds(10);
             options.ShutdownTimeout = TimeSpan.FromSeconds(10);
             options.ResetTargetUrl = new Uri(server.BaseAddress, "reset").ToString();
             options.BrowserCachePath = Path.Combine(Path.GetTempPath(), "puppeteer-page-pool-tests", Guid.NewGuid().ToString("N"));
-            options.LaunchSettings = new PagePoolLaunchSettings
+            options.LaunchOptions = new PagePoolLaunchOptions
             {
                 Headless = true,
                 TimeoutMilliseconds = 120_000,

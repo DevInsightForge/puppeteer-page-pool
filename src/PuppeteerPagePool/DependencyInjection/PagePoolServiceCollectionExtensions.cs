@@ -11,7 +11,7 @@ namespace PuppeteerPagePool.DependencyInjection;
 /// <summary>
 /// Service collection extensions for registering the page pool.
 /// </summary>
-public static class PuppeteerPagePoolServiceCollectionExtensions
+public static class PagePoolServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the page pool, hosted lifecycle integration, and required internal services.
@@ -19,19 +19,19 @@ public static class PuppeteerPagePoolServiceCollectionExtensions
     /// <param name="services">Service collection.</param>
     /// <param name="configure">Options configuration delegate.</param>
     /// <returns>The same service collection for chaining.</returns>
-    public static IServiceCollection AddPuppeteerPagePool(
+    public static IServiceCollection AddPagePool(
         this IServiceCollection services,
-        Action<PuppeteerPagePoolOptions> configure)
+        Action<PagePoolOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configure);
 
-        services.AddOptions<PuppeteerPagePoolOptions>()
+        services.AddOptions<PagePoolOptions>()
             .Configure(configure);
 
         services.TryAddSingleton<IBrowserSessionFactory, PuppeteerBrowserSessionFactory>();
         services.TryAddSingleton<PagePool>(serviceProvider => new PagePool(
-            serviceProvider.GetRequiredService<IOptions<PuppeteerPagePoolOptions>>(),
+            serviceProvider.GetRequiredService<IOptions<PagePoolOptions>>(),
             serviceProvider.GetRequiredService<ILogger<PagePool>>(),
             serviceProvider.GetRequiredService<IBrowserSessionFactory>()));
         services.TryAddSingleton<IPagePool>(serviceProvider => serviceProvider.GetRequiredService<PagePool>());

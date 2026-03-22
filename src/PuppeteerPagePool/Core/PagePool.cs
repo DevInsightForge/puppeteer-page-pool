@@ -11,7 +11,7 @@ internal sealed class PagePool : IPagePool
 {
     private readonly ILogger<PagePool> _logger;
     private readonly IBrowserSessionFactory _browserSessionFactory;
-    private readonly PuppeteerPagePoolOptions _options;
+    private readonly PagePoolOptions _options;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly object _stateLock = new();
     private Channel<PageSlot> _availableSlots;
@@ -29,7 +29,7 @@ internal sealed class PagePool : IPagePool
     private bool _disposed;
 
     internal PagePool(
-        IOptions<PuppeteerPagePoolOptions> options,
+        IOptions<PagePoolOptions> options,
         ILogger<PagePool> logger,
         IBrowserSessionFactory browserSessionFactory)
     {
