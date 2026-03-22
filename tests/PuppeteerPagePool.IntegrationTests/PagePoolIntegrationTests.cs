@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using PuppeteerPagePool.DependencyInjection;
-using PuppeteerSharp;
 
 namespace PuppeteerPagePool.IntegrationTests;
 
@@ -19,10 +18,10 @@ public sealed class PagePoolIntegrationTests
             options.ShutdownTimeout = TimeSpan.FromSeconds(10);
             options.ResetTargetUrl = new Uri(server.BaseAddress, "reset").ToString();
             options.BrowserCachePath = Path.Combine(Path.GetTempPath(), "puppeteer-page-pool-tests", Guid.NewGuid().ToString("N"));
-            options.LaunchOptions = new LaunchOptions
+            options.LaunchSettings = new PagePoolLaunchSettings
             {
                 Headless = true,
-                Timeout = 120_000,
+                TimeoutMilliseconds = 120_000,
                 Args =
                 [
                     "--disable-dev-shm-usage",

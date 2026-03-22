@@ -68,14 +68,19 @@ public sealed class PuppeteerPagePoolOptions
     public bool EnsureBrowserDownloaded { get; set; } = true;
 
     /// <summary>
-    /// Browser type used by <see cref="BrowserFetcher"/> when downloading binaries.
+    /// Browser family to launch or validate.
     /// </summary>
-    public SupportedBrowser Browser { get; set; } = SupportedBrowser.Chrome;
+    public PagePoolBrowser Browser { get; set; } = PagePoolBrowser.Chrome;
 
     /// <summary>
     /// Optional browser build id for deterministic browser fetch.
     /// </summary>
     public string? BrowserBuildId { get; set; }
+
+    /// <summary>
+    /// Browser executable path that must be used when provided.
+    /// </summary>
+    public string? BrowserExecutablePath { get; set; }
 
     /// <summary>
     /// Optional cache path for downloaded browser binaries.
@@ -93,19 +98,19 @@ public sealed class PuppeteerPagePoolOptions
     public TimeSpan ResetNavigationTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Navigation completion signals used during page reset.
+    /// Navigation completion conditions required during reset.
     /// </summary>
-    public WaitUntilNavigation[] ResetWaitUntil { get; set; } = [WaitUntilNavigation.Load];
+    public PagePoolNavigationWaitUntil[] ResetWaitUntil { get; set; } = [PagePoolNavigationWaitUntil.Load];
 
     /// <summary>
-    /// Browser launch options for local browser processes.
+    /// Launch configuration for local browser processes.
     /// </summary>
-    public LaunchOptions? LaunchOptions { get; set; }
+    public PagePoolLaunchSettings? LaunchSettings { get; set; }
 
     /// <summary>
-    /// Browser connection options for remote browser endpoints.
+    /// Connection configuration for remote browser endpoints.
     /// </summary>
-    public ConnectOptions? ConnectOptions { get; set; }
+    public PagePoolConnectSettings? ConnectSettings { get; set; }
 
     /// <summary>
     /// Optional callback invoked once for each newly created page before first lease.
@@ -135,12 +140,28 @@ public sealed class PuppeteerPagePoolOptions
             EnsureBrowserDownloaded = EnsureBrowserDownloaded,
             Browser = Browser,
             BrowserBuildId = BrowserBuildId,
+            BrowserExecutablePath = BrowserExecutablePath,
             BrowserCachePath = BrowserCachePath,
             BrowserHealthCheckTimeout = BrowserHealthCheckTimeout,
             ResetNavigationTimeout = ResetNavigationTimeout,
             ResetWaitUntil = [.. ResetWaitUntil],
-            LaunchOptions = LaunchOptions,
-            ConnectOptions = ConnectOptions,
+            LaunchSettings = LaunchSettings is null
+                ? null
+                : new PagePoolLaunchSettings
+                {
+                    Headless = LaunchSettings.Headless,
+                    TimeoutMilliseconds = LaunchSettings.TimeoutMilliseconds,
+                    Args = [.. LaunchSettings.Args]
+                },
+            ConnectSettings = ConnectSettings is null
+                ? null
+                : new PagePoolConnectSettings
+                {
+                    BrowserWebSocketEndpoint = ConnectSettings.BrowserWebSocketEndpoint,
+                    BrowserUrl = ConnectSettings.BrowserUrl,
+                    IgnoreHttpsErrors = ConnectSettings.IgnoreHttpsErrors,
+                    SlowMoMilliseconds = ConnectSettings.SlowMoMilliseconds
+                },
             ConfigurePageAsync = ConfigurePageAsync,
             BeforeLeaseAsync = BeforeLeaseAsync
         };
@@ -183,9 +204,9 @@ public sealed class PuppeteerPagePoolOptions
             throw new ArgumentOutOfRangeException(nameof(MaxConsecutiveFailures));
         }
 
-        if (LaunchOptions is not null && ConnectOptions is not null)
+        if (LaunchSettings is not null && ConnectSettings is not null)
         {
-            throw new ArgumentException("LaunchOptions and ConnectOptions cannot both be set.");
+            throw new ArgumentException("LaunchSettings and ConnectSettings cannot both be set.");
         }
 
         if (BrowserHealthCheckTimeout <= TimeSpan.Zero)
@@ -201,6 +222,36 @@ public sealed class PuppeteerPagePoolOptions
         if (ResetWaitUntil.Length == 0)
         {
             throw new ArgumentException("ResetWaitUntil must contain at least one navigation condition.", nameof(ResetWaitUntil));
+        }
+
+        if (LaunchSettings is not null && LaunchSettings.TimeoutMilliseconds < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(LaunchSettings.TimeoutMilliseconds));
+        }
+
+        if (ConnectSettings is not null &&
+            string.IsNullOrWhiteSpace(ConnectSettings.BrowserWebSocketEndpoint) &&
+            string.IsNullOrWhiteSpace(ConnectSettings.BrowserUrl))
+        {
+            throw new ArgumentException("ConnectSettings requires BrowserWebSocketEndpoint or BrowserUrl.", nameof(ConnectSettings));
+        }
+
+        if (ConnectSettings is not null && ConnectSettings.SlowMoMilliseconds < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ConnectSettings.SlowMoMilliseconds));
+        }
+
+        if (!string.IsNullOrWhiteSpace(BrowserExecutablePath))
+        {
+            if (ConnectSettings is not null)
+            {
+                throw new ArgumentException("BrowserExecutablePath cannot be used with ConnectSettings.", nameof(BrowserExecutablePath));
+            }
+
+            if (!string.IsNullOrWhiteSpace(BrowserBuildId))
+            {
+                throw new ArgumentException("BrowserBuildId cannot be used with BrowserExecutablePath.", nameof(BrowserBuildId));
+            }
         }
     }
 }

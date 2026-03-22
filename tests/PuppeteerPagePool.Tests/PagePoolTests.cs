@@ -256,8 +256,11 @@ public sealed class PagePoolTests
         [
             (Action<PuppeteerPagePoolOptions>)(options =>
             {
-                options.LaunchOptions = new LaunchOptions();
-                options.ConnectOptions = new ConnectOptions();
+                options.LaunchSettings = new PagePoolLaunchSettings();
+                options.ConnectSettings = new PagePoolConnectSettings
+                {
+                    BrowserWebSocketEndpoint = "ws://127.0.0.1:3000"
+                };
             }),
             typeof(ArgumentException)
         ];

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using PuppeteerSharp;
 using PuppeteerSharp.BrowserData;
 
@@ -27,23 +28,21 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 
     public async ValueTask<IBrowserSession> CreateAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken)
     {
-        if (options.ConnectOptions is not null)
+        if (options.ConnectSettings is not null)
         {
-            var connectedBrowser = await Puppeteer.ConnectAsync(options.ConnectOptions).ConfigureAwait(false);
+            var connectedBrowser = await Puppeteer.ConnectAsync(ToConnectOptions(options.ConnectSettings)).ConfigureAwait(false);
             return new PuppeteerBrowserSession(connectedBrowser);
         }
 
-        var launchOptions = options.LaunchOptions ?? new LaunchOptions
-        {
-            Headless = true,
-            Args = [.. DefaultLaunchArguments]
-        };
+        var launchOptions = ToLaunchOptions(options.LaunchSettings);
+        SetConfiguredExecutablePath(options, launchOptions);
 
         if (string.IsNullOrWhiteSpace(launchOptions.ExecutablePath))
         {
             var executablePath = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
             if (!string.IsNullOrWhiteSpace(executablePath) && File.Exists(executablePath))
             {
+                ValidateExecutableCompatibility(executablePath, options.Browser);
                 launchOptions.ExecutablePath = executablePath;
             }
         }
@@ -52,7 +51,7 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
         {
             var browserFetcher = new BrowserFetcher(new BrowserFetcherOptions
             {
-                Browser = options.Browser,
+                Browser = ToSupportedBrowser(options.Browser),
                 Path = options.BrowserCachePath
             });
 
@@ -68,6 +67,160 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 
         var launchedBrowser = await Puppeteer.LaunchAsync(launchOptions).WaitAsync(cancellationToken).ConfigureAwait(false);
         return new PuppeteerBrowserSession(launchedBrowser);
+    }
+
+    private static LaunchOptions ToLaunchOptions(PagePoolLaunchSettings? settings)
+    {
+        if (settings is null)
+        {
+            return new LaunchOptions
+            {
+                Headless = true,
+                Args = [.. DefaultLaunchArguments]
+            };
+        }
+
+        return new LaunchOptions
+        {
+            Headless = settings.Headless,
+            Timeout = settings.TimeoutMilliseconds,
+            Args = settings.Args.Length == 0 ? [.. DefaultLaunchArguments] : [.. settings.Args]
+        };
+    }
+
+    private static ConnectOptions ToConnectOptions(PagePoolConnectSettings settings)
+    {
+        return new ConnectOptions
+        {
+            BrowserWSEndpoint = settings.BrowserWebSocketEndpoint,
+            BrowserURL = settings.BrowserUrl,
+            SlowMo = settings.SlowMoMilliseconds
+        };
+    }
+
+    private static SupportedBrowser ToSupportedBrowser(PagePoolBrowser browser)
+    {
+        return browser switch
+        {
+            PagePoolBrowser.Chrome => SupportedBrowser.Chrome,
+            PagePoolBrowser.Chromium => SupportedBrowser.Chromium,
+            PagePoolBrowser.Firefox => SupportedBrowser.Firefox,
+            _ => throw new ArgumentOutOfRangeException(nameof(browser))
+        };
+    }
+
+    private static WaitUntilNavigation[] ToWaitUntilNavigation(PagePoolNavigationWaitUntil[] values)
+    {
+        var waitUntil = new WaitUntilNavigation[values.Length];
+        for (var index = 0; index < values.Length; index++)
+        {
+            waitUntil[index] = values[index] switch
+            {
+                PagePoolNavigationWaitUntil.Load => WaitUntilNavigation.Load,
+                PagePoolNavigationWaitUntil.DOMContentLoaded => WaitUntilNavigation.DOMContentLoaded,
+                PagePoolNavigationWaitUntil.Networkidle0 => WaitUntilNavigation.Networkidle0,
+                PagePoolNavigationWaitUntil.Networkidle2 => WaitUntilNavigation.Networkidle2,
+                _ => throw new ArgumentOutOfRangeException(nameof(values))
+            };
+        }
+
+        return waitUntil;
+    }
+
+    private static void SetConfiguredExecutablePath(PuppeteerPagePoolOptions options, LaunchOptions launchOptions)
+    {
+        if (string.IsNullOrWhiteSpace(options.BrowserExecutablePath))
+        {
+            return;
+        }
+
+        var executablePath = options.BrowserExecutablePath;
+        if (!File.Exists(executablePath))
+        {
+            throw new PagePoolUnavailableException($"Browser executable path does not exist: {executablePath}");
+        }
+
+        ValidateExecutableCompatibility(executablePath, options.Browser);
+        launchOptions.ExecutablePath = executablePath;
+    }
+
+    private static void ValidateExecutableCompatibility(string executablePath, PagePoolBrowser expectedBrowser)
+    {
+        var versionOutput = GetExecutableVersionOutput(executablePath);
+        var normalized = versionOutput.ToLowerInvariant();
+
+        var isMatch = expectedBrowser switch
+        {
+            PagePoolBrowser.Chrome => normalized.Contains("chrome") && !normalized.Contains("chromium"),
+            PagePoolBrowser.Chromium => normalized.Contains("chromium"),
+            PagePoolBrowser.Firefox => normalized.Contains("firefox"),
+            _ => false
+        };
+
+        if (!isMatch)
+        {
+            throw new PagePoolUnavailableException(
+                $"Browser executable does not match configured browser '{expectedBrowser}'. Version output: '{versionOutput}'.");
+        }
+    }
+
+    private static string GetExecutableVersionOutput(string executablePath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            Arguments = "--version",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        try
+        {
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                throw new PagePoolUnavailableException($"Could not start browser executable: {executablePath}");
+            }
+
+            if (!process.WaitForExit(5_000))
+            {
+                try
+                {
+                    process.Kill(true);
+                }
+                catch
+                {
+                }
+
+                throw new PagePoolUnavailableException($"Browser executable did not respond to --version: {executablePath}");
+            }
+
+            var output = process.StandardOutput.ReadToEnd().Trim();
+            var error = process.StandardError.ReadToEnd().Trim();
+
+            if (process.ExitCode != 0)
+            {
+                throw new PagePoolUnavailableException(
+                    $"Browser executable failed validation. ExitCode={process.ExitCode}, Error='{error}'.");
+            }
+
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                throw new PagePoolUnavailableException($"Browser executable produced empty version output: {executablePath}");
+            }
+
+            return output;
+        }
+        catch (PagePoolUnavailableException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new PagePoolUnavailableException($"Failed to validate browser executable: {executablePath}", exception);
+        }
     }
 
     private sealed class PuppeteerBrowserSession : IBrowserSession
@@ -171,7 +324,7 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
         {
             await _page.GoToAsync(options.ResetTargetUrl, new NavigationOptions
             {
-                WaitUntil = options.ResetWaitUntil,
+                WaitUntil = ToWaitUntilNavigation(options.ResetWaitUntil),
                 Timeout = (int)options.ResetNavigationTimeout.TotalMilliseconds
             }).ConfigureAwait(false);
 
