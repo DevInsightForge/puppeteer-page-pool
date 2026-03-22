@@ -1,3 +1,4 @@
+using PuppeteerPagePool.Configuration;
 using PuppeteerSharp;
 
 namespace PuppeteerPagePool.Internal;

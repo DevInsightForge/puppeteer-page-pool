@@ -1,4 +1,6 @@
-namespace PuppeteerPagePool;
+using PuppeteerPagePool.Core;
+
+namespace PuppeteerPagePool.Exceptions;
 
 /// <summary>
 /// Thrown when a page cannot be acquired before the configured timeout.
@@ -41,6 +43,14 @@ public sealed class PagePoolUnavailableException : InvalidOperationException
     /// <param name="innerException">Optional inner exception.</param>
     public PagePoolUnavailableException(string message, Exception? innerException = null)
         : base(message, innerException)
+    {
+    }
+}
+
+public sealed class PageLeaseExpiredException : InvalidOperationException
+{
+    public PageLeaseExpiredException()
+        : base("The page lease has expired and can no longer be used.")
     {
     }
 }

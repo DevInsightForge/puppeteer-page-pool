@@ -2,10 +2,11 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using PuppeteerPagePool.Configuration;
+using PuppeteerPagePool.Health;
 using PuppeteerPagePool.Internal;
-using PuppeteerSharp;
 
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Core;
 
 internal sealed class PagePool : IPagePool
 {
@@ -24,6 +25,10 @@ internal sealed class PagePool : IPagePool
     private int _waitingRequests;
     private int _replacementCount;
     private int _browserRestartCount;
+    private long _completedLeaseCount;
+    private long _operationFailureCount;
+    private long _preparationFailureCount;
+    private long _resetFailureCount;
     private bool _initialized;
     private bool _acceptingLeases = true;
     private bool _disposed;
@@ -40,96 +45,70 @@ internal sealed class PagePool : IPagePool
         _availableSlots = CreateChannel(_options.PoolSize);
     }
 
-    public async ValueTask WithPage(
-        Action<IPage> operation,
+    public async ValueTask ExecuteAsync(
+        Func<ILeasedPage, CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        await ExecuteCoreAsync(
-                (page, _) =>
-                {
-                    operation(page);
-                    return ValueTask.CompletedTask;
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
+        await ExecuteCoreAsync(operation, cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask WithPage(
-        Func<IPage, ValueTask> operation,
+    public ValueTask<TResult> ExecuteAsync<TResult>(
+        Func<ILeasedPage, CancellationToken, ValueTask<TResult>> operation,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
-
-        await ExecuteCoreAsync(
-                async (page, _) =>
-                {
-                    await operation(page).ConfigureAwait(false);
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    public ValueTask<TResult> WithPage<TResult>(
-        Func<IPage, TResult> operation,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(operation);
-        return ExecuteCoreWithResultAsync((page, _) => ValueTask.FromResult(operation(page)), cancellationToken);
-    }
-
-    public ValueTask<TResult> WithPage<TResult>(
-        Func<IPage, ValueTask<TResult>> operation,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(operation);
-        return ExecuteCoreWithResultAsync((page, _) => operation(page), cancellationToken);
+        return ExecuteCoreWithResultAsync(operation, cancellationToken);
     }
 
     private async ValueTask ExecuteCoreAsync(
-        Func<IPage, CancellationToken, ValueTask> operation,
+        Func<ILeasedPage, CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken)
     {
         var pageSlot = await AcquirePageSlotAsync(cancellationToken).ConfigureAwait(false);
-        var page = pageSlot.PageSession.Page;
-        var shouldRecycle = false;
+        var leasedPage = new LeasedPage(pageSlot.PageSession.Page);
+        var releaseMode = PageReleaseMode.Success;
 
         try
         {
-            await operation(page, cancellationToken).ConfigureAwait(false);
+            await operation(leasedPage, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
-            shouldRecycle = true;
+            releaseMode = PageReleaseMode.OperationFailed;
+            Interlocked.Increment(ref _operationFailureCount);
             throw;
         }
         finally
         {
-            await ReleaseAsync(pageSlot, shouldRecycle || page.IsClosed).ConfigureAwait(false);
+            leasedPage.Expire();
+            await ReleaseAsync(pageSlot, releaseMode).ConfigureAwait(false);
         }
     }
 
     private async ValueTask<TResult> ExecuteCoreWithResultAsync<TResult>(
-        Func<IPage, CancellationToken, ValueTask<TResult>> operation,
+        Func<ILeasedPage, CancellationToken, ValueTask<TResult>> operation,
         CancellationToken cancellationToken)
     {
         var pageSlot = await AcquirePageSlotAsync(cancellationToken).ConfigureAwait(false);
-        var page = pageSlot.PageSession.Page;
-        var shouldRecycle = false;
+        var leasedPage = new LeasedPage(pageSlot.PageSession.Page);
+        var releaseMode = PageReleaseMode.Success;
 
         try
         {
-            return await operation(page, cancellationToken).ConfigureAwait(false);
+            return await operation(leasedPage, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
-            shouldRecycle = true;
+            releaseMode = PageReleaseMode.OperationFailed;
+            Interlocked.Increment(ref _operationFailureCount);
             throw;
         }
         finally
         {
-            await ReleaseAsync(pageSlot, shouldRecycle || page.IsClosed).ConfigureAwait(false);
+            leasedPage.Expire();
+            await ReleaseAsync(pageSlot, releaseMode).ConfigureAwait(false);
         }
     }
 
@@ -183,7 +162,8 @@ internal sealed class PagePool : IPagePool
                 }
                 catch (Exception exception)
                 {
-                    await ReleaseAsync(pageSlot, true).ConfigureAwait(false);
+                    Interlocked.Increment(ref _preparationFailureCount);
+                    await ReleaseAsync(pageSlot, PageReleaseMode.Unhealthy).ConfigureAwait(false);
                     _logger.LogWarning(exception, "Page preparation failed.");
                 }
             }
@@ -206,7 +186,11 @@ internal sealed class PagePool : IPagePool
             _browserSession?.IsConnected ?? false,
             _acceptingLeases && !_disposed,
             Volatile.Read(ref _replacementCount),
-            Volatile.Read(ref _browserRestartCount)));
+            Volatile.Read(ref _browserRestartCount),
+            Interlocked.Read(ref _completedLeaseCount),
+            Interlocked.Read(ref _operationFailureCount),
+            Interlocked.Read(ref _preparationFailureCount),
+            Interlocked.Read(ref _resetFailureCount)));
     }
 
     internal async ValueTask<bool> IsBrowserHealthyAsync(CancellationToken cancellationToken)
@@ -217,7 +201,7 @@ internal sealed class PagePool : IPagePool
         }
 
         return await _browserSession
-            .IsResponsiveAsync(_options.BrowserHealthCheckTimeout, cancellationToken)
+            .IsResponsiveAsync(_options.Advanced.BrowserHealthCheckTimeout, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -311,11 +295,21 @@ internal sealed class PagePool : IPagePool
         }
     }
 
-    private async ValueTask ReleaseAsync(PageSlot pageSlot, bool unhealthy)
+    private async ValueTask ReleaseAsync(PageSlot pageSlot, PageReleaseMode releaseMode)
     {
-        pageSlot.State = unhealthy ? PageSlotState.Unhealthy : PageSlotState.Resetting;
+        pageSlot.State = releaseMode == PageReleaseMode.Unhealthy ? PageSlotState.Unhealthy : PageSlotState.Resetting;
         var currentGeneration = Volatile.Read(ref _generation);
-        var recyclePage = unhealthy || pageSlot.PageSession.IsClosed || pageSlot.Generation != currentGeneration || pageSlot.UseCount + 1 >= _options.MaxPageUses;
+        var consecutiveLeaseFailures = releaseMode == PageReleaseMode.OperationFailed
+            ? pageSlot.ConsecutiveLeaseFailures + 1
+            : 0;
+        var recyclePage =
+            releaseMode == PageReleaseMode.Unhealthy ||
+            pageSlot.PageSession.IsClosed ||
+            pageSlot.Generation != currentGeneration ||
+            pageSlot.UseCount + 1 >= _options.Advanced.MaxPageUses ||
+            consecutiveLeaseFailures >= _options.Advanced.MaxConsecutiveLeaseFailures ||
+            (releaseMode == PageReleaseMode.OperationFailed &&
+             _options.Advanced.OperationFailureHandling == PageOperationFailureHandling.RecyclePage);
 
         try
         {
@@ -323,6 +317,7 @@ internal sealed class PagePool : IPagePool
             {
                 await pageSlot.PageSession.ResetAsync(_options, CancellationToken.None).ConfigureAwait(false);
                 pageSlot.UseCount++;
+                pageSlot.ConsecutiveLeaseFailures = consecutiveLeaseFailures;
                 pageSlot.State = PageSlotState.Warm;
                 await EnqueueAsync(pageSlot).ConfigureAwait(false);
                 return;
@@ -332,11 +327,13 @@ internal sealed class PagePool : IPagePool
         }
         catch (Exception exception)
         {
+            Interlocked.Increment(ref _resetFailureCount);
             _logger.LogWarning(exception, "Page recycle failed.");
             await ReplaceAsync(pageSlot).ConfigureAwait(false);
         }
         finally
         {
+            Interlocked.Increment(ref _completedLeaseCount);
             if (Interlocked.Decrement(ref _leasedPages) == 0)
             {
                 _drainedTcs.TrySetResult();
@@ -554,5 +551,12 @@ internal sealed class PagePool : IPagePool
         {
             _logger.LogError(exception, "Browser rebuild failed after disconnection.");
         }
+    }
+
+    private enum PageReleaseMode
+    {
+        Success,
+        OperationFailed,
+        Unhealthy
     }
 }

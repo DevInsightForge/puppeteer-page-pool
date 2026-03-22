@@ -1,4 +1,4 @@
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Health;
 
 /// <summary>
 /// Represents current pool counters and readiness state.
@@ -11,6 +11,10 @@ namespace PuppeteerPagePool;
 /// <param name="AcceptingLeases">Indicates whether the pool currently accepts new leases.</param>
 /// <param name="ReplacementCount">Total number of page replacements since startup.</param>
 /// <param name="BrowserRestartCount">Total number of browser rebuilds since startup.</param>
+/// <param name="CompletedLeaseCount">Total number of completed lease callbacks.</param>
+/// <param name="OperationFailureCount">Total number of lease callbacks that faulted.</param>
+/// <param name="PreparationFailureCount">Total number of page preparation failures before lease handoff.</param>
+/// <param name="ResetFailureCount">Total number of page reset or recycle failures after lease completion.</param>
 public sealed record PagePoolHealthSnapshot(
     int PoolSize,
     int AvailablePages,
@@ -19,4 +23,8 @@ public sealed record PagePoolHealthSnapshot(
     bool BrowserConnected,
     bool AcceptingLeases,
     int ReplacementCount,
-    int BrowserRestartCount);
+    int BrowserRestartCount,
+    long CompletedLeaseCount,
+    long OperationFailureCount,
+    long PreparationFailureCount,
+    long ResetFailureCount);

@@ -1,6 +1,4 @@
-using PuppeteerSharp;
-
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Configuration;
 
 /// <summary>
 /// Configures pool behavior, browser lifecycle, and page reset policies.
@@ -33,21 +31,6 @@ public sealed class PagePoolOptions
     public string ResetTargetUrl { get; set; } = "about:blank";
 
     /// <summary>
-    /// Maximum number of successful uses before a page is recycled.
-    /// </summary>
-    public int MaxPageUses { get; set; } = 1_000;
-
-    /// <summary>
-    /// Reserved for failure policy compatibility and validation.
-    /// </summary>
-    public int MaxConsecutiveLeaseFailures { get; set; } = 3;
-
-    /// <summary>
-    /// Clears page cookies when a lease completes.
-    /// </summary>
-    public bool ClearCookiesOnReturn { get; set; } = true;
-
-    /// <summary>
     /// Clears local and session storage when a lease completes.
     /// </summary>
     public bool ClearStorageOnReturn { get; set; } = true;
@@ -58,49 +41,14 @@ public sealed class PagePoolOptions
     public bool JavaScriptEnabled { get; set; } = false;
 
     /// <summary>
-    /// Validates page readiness before each lease.
-    /// </summary>
-    public bool ValidatePageHealthBeforeLease { get; set; } = true;
-
-    /// <summary>
-    /// Downloads browser binaries when needed and no executable path is configured.
-    /// </summary>
-    public bool EnsureBrowserDownloaded { get; set; } = true;
-
-    /// <summary>
     /// Browser family to launch or validate.
     /// </summary>
     public PagePoolBrowser Browser { get; set; } = PagePoolBrowser.Chrome;
 
     /// <summary>
-    /// Optional browser build id for deterministic browser fetch.
-    /// </summary>
-    public string? BrowserBuildId { get; set; }
-
-    /// <summary>
     /// Browser executable path that must be used when provided.
     /// </summary>
     public string? ExecutablePath { get; set; }
-
-    /// <summary>
-    /// Optional cache path for downloaded browser binaries.
-    /// </summary>
-    public string? BrowserCachePath { get; set; }
-
-    /// <summary>
-    /// Timeout used by browser responsiveness health probes.
-    /// </summary>
-    public TimeSpan BrowserHealthCheckTimeout { get; set; } = TimeSpan.FromSeconds(5);
-
-    /// <summary>
-    /// Navigation timeout used during page reset.
-    /// </summary>
-    public TimeSpan ResetNavigationTimeout { get; set; } = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// Navigation completion conditions required during reset.
-    /// </summary>
-    public PagePoolNavigationWaitUntil[] ResetWaitConditions { get; set; } = [PagePoolNavigationWaitUntil.Load];
 
     /// <summary>
     /// Launch configuration for local browser processes.
@@ -112,15 +60,7 @@ public sealed class PagePoolOptions
     /// </summary>
     public PagePoolConnectOptions? ConnectOptions { get; set; }
 
-    /// <summary>
-    /// Optional callback invoked once for each newly created page before first lease.
-    /// </summary>
-    public Func<IPage, CancellationToken, ValueTask>? ConfigurePageAsync { get; set; }
-
-    /// <summary>
-    /// Optional callback invoked before each lease is handed to user code.
-    /// </summary>
-    public Func<IPage, CancellationToken, ValueTask>? BeforeLeaseAsync { get; set; }
+    internal PagePoolAdvancedOptions Advanced { get; private set; } = new();
 
     internal PagePoolOptions Clone()
     {
@@ -131,20 +71,10 @@ public sealed class PagePoolOptions
             WarmupOnStartup = WarmupOnStartup,
             ShutdownTimeout = ShutdownTimeout,
             ResetTargetUrl = ResetTargetUrl,
-            MaxPageUses = MaxPageUses,
-            MaxConsecutiveLeaseFailures = MaxConsecutiveLeaseFailures,
-            ClearCookiesOnReturn = ClearCookiesOnReturn,
             ClearStorageOnReturn = ClearStorageOnReturn,
             JavaScriptEnabled = JavaScriptEnabled,
-            ValidatePageHealthBeforeLease = ValidatePageHealthBeforeLease,
-            EnsureBrowserDownloaded = EnsureBrowserDownloaded,
             Browser = Browser,
-            BrowserBuildId = BrowserBuildId,
             ExecutablePath = ExecutablePath,
-            BrowserCachePath = BrowserCachePath,
-            BrowserHealthCheckTimeout = BrowserHealthCheckTimeout,
-            ResetNavigationTimeout = ResetNavigationTimeout,
-            ResetWaitConditions = [.. ResetWaitConditions],
             LaunchOptions = LaunchOptions is null
                 ? null
                 : new PagePoolLaunchOptions
@@ -162,8 +92,7 @@ public sealed class PagePoolOptions
                     IgnoreHttpsErrors = ConnectOptions.IgnoreHttpsErrors,
                     SlowMoMilliseconds = ConnectOptions.SlowMoMilliseconds
                 },
-            ConfigurePageAsync = ConfigurePageAsync,
-            BeforeLeaseAsync = BeforeLeaseAsync
+            Advanced = Advanced.Clone()
         };
     }
 
@@ -184,44 +113,19 @@ public sealed class PagePoolOptions
             throw new ArgumentOutOfRangeException(nameof(ShutdownTimeout));
         }
 
-        if (string.IsNullOrWhiteSpace(ResetTargetUrl))
+        if (_optionsRequiresResetTargetUrl() && string.IsNullOrWhiteSpace(ResetTargetUrl))
         {
             throw new ArgumentException("ResetTargetUrl is required.", nameof(ResetTargetUrl));
         }
 
-        if (!Uri.TryCreate(ResetTargetUrl, UriKind.Absolute, out _))
+        if (_optionsRequiresResetTargetUrl() && !Uri.TryCreate(ResetTargetUrl, UriKind.Absolute, out _))
         {
             throw new ArgumentException("ResetTargetUrl must be an absolute URI.", nameof(ResetTargetUrl));
-        }
-
-        if (MaxPageUses <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(MaxPageUses));
-        }
-
-        if (MaxConsecutiveLeaseFailures <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(MaxConsecutiveLeaseFailures));
         }
 
         if (LaunchOptions is not null && ConnectOptions is not null)
         {
             throw new ArgumentException("LaunchOptions and ConnectOptions cannot both be set.");
-        }
-
-        if (BrowserHealthCheckTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(BrowserHealthCheckTimeout));
-        }
-
-        if (ResetNavigationTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(ResetNavigationTimeout));
-        }
-
-        if (ResetWaitConditions.Length == 0)
-        {
-            throw new ArgumentException("ResetWaitConditions must contain at least one navigation condition.", nameof(ResetWaitConditions));
         }
 
         if (LaunchOptions is not null && LaunchOptions.TimeoutMilliseconds < 0)
@@ -248,10 +152,23 @@ public sealed class PagePoolOptions
                 throw new ArgumentException("ExecutablePath cannot be used with ConnectOptions.", nameof(ExecutablePath));
             }
 
-            if (!string.IsNullOrWhiteSpace(BrowserBuildId))
+            if (!string.IsNullOrWhiteSpace(Advanced.BrowserBuildId))
             {
-                throw new ArgumentException("BrowserBuildId cannot be used with ExecutablePath.", nameof(BrowserBuildId));
+                throw new ArgumentException("BrowserBuildId cannot be used with ExecutablePath.", nameof(Advanced.BrowserBuildId));
             }
         }
+
+        Advanced.Validate();
+    }
+
+    internal void ConfigureAdvanced(Action<PagePoolAdvancedOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(Advanced);
+    }
+
+    private bool _optionsRequiresResetTargetUrl()
+    {
+        return Advanced.ResetStrategy == PageResetStrategy.Navigate;
     }
 }

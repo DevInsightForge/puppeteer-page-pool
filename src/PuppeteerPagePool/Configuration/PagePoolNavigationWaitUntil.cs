@@ -1,4 +1,4 @@
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Configuration;
 
 /// <summary>
 /// Navigation completion conditions for reset navigation.

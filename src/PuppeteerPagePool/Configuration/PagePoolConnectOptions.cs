@@ -1,4 +1,4 @@
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Configuration;
 
 /// <summary>
 /// Stable connection configuration used by the pool for remote browser attachment.

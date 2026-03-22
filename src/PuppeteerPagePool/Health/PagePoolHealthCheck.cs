@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using PuppeteerPagePool.Core;
 
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Health;
 
 /// <summary>
 /// Reports readiness for the registered page pool instance.

@@ -4,6 +4,10 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using PuppeteerPagePool.Configuration;
+using PuppeteerPagePool.Core;
+using PuppeteerPagePool.Health;
+using PuppeteerPagePool.Hosting;
 using PuppeteerPagePool.Internal;
 
 namespace PuppeteerPagePool.DependencyInjection;
@@ -23,11 +27,24 @@ public static class PagePoolServiceCollectionExtensions
         this IServiceCollection services,
         Action<PagePoolOptions> configure)
     {
+        return AddPagePool(services, configure, null);
+    }
+
+    public static IServiceCollection AddPagePool(
+        this IServiceCollection services,
+        Action<PagePoolOptions> configure,
+        Action<PagePoolAdvancedOptions>? configureAdvanced)
+    {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configure);
 
-        services.AddOptions<PagePoolOptions>()
+        var optionsBuilder = services.AddOptions<PagePoolOptions>()
             .Configure(configure);
+
+        if (configureAdvanced is not null)
+        {
+            optionsBuilder.PostConfigure(options => options.ConfigureAdvanced(configureAdvanced));
+        }
 
         services.TryAddSingleton<IBrowserSessionFactory, PuppeteerBrowserSessionFactory>();
         services.TryAddSingleton<PagePool>(serviceProvider => new PagePool(

@@ -1,4 +1,4 @@
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Configuration;
 
 /// <summary>
 /// Browser family used by pool configuration and executable validation.

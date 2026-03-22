@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using PuppeteerPagePool.Configuration;
+using PuppeteerPagePool.Core;
+using PuppeteerPagePool.Exceptions;
 using PuppeteerSharp;
 using PuppeteerSharp.BrowserData;
 
@@ -47,17 +50,17 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
             }
         }
 
-        if (options.EnsureBrowserDownloaded && string.IsNullOrWhiteSpace(launchOptions.ExecutablePath))
+        if (options.Advanced.EnsureBrowserDownloaded && string.IsNullOrWhiteSpace(launchOptions.ExecutablePath))
         {
             var browserFetcher = new BrowserFetcher(new BrowserFetcherOptions
             {
                 Browser = ToSupportedBrowser(options.Browser),
-                Path = options.BrowserCachePath
+                Path = options.Advanced.BrowserCachePath
             });
 
-            var installedBrowser = string.IsNullOrWhiteSpace(options.BrowserBuildId)
+            var installedBrowser = string.IsNullOrWhiteSpace(options.Advanced.BrowserBuildId)
                 ? await browserFetcher.DownloadAsync().ConfigureAwait(false)
-                : await browserFetcher.DownloadAsync(options.BrowserBuildId).ConfigureAwait(false);
+                : await browserFetcher.DownloadAsync(options.Advanced.BrowserBuildId).ConfigureAwait(false);
 
             if (string.IsNullOrWhiteSpace(launchOptions.ExecutablePath))
             {
@@ -107,24 +110,6 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
             PagePoolBrowser.Firefox => SupportedBrowser.Firefox,
             _ => throw new ArgumentOutOfRangeException(nameof(browser))
         };
-    }
-
-    private static WaitUntilNavigation[] ToWaitUntilNavigation(PagePoolNavigationWaitUntil[] waitConditions)
-    {
-        var waitUntil = new WaitUntilNavigation[waitConditions.Length];
-        for (var index = 0; index < waitConditions.Length; index++)
-        {
-            waitUntil[index] = waitConditions[index] switch
-            {
-                PagePoolNavigationWaitUntil.Load => WaitUntilNavigation.Load,
-                PagePoolNavigationWaitUntil.DOMContentLoaded => WaitUntilNavigation.DOMContentLoaded,
-                PagePoolNavigationWaitUntil.Networkidle0 => WaitUntilNavigation.Networkidle0,
-                PagePoolNavigationWaitUntil.Networkidle2 => WaitUntilNavigation.Networkidle2,
-                _ => throw new ArgumentOutOfRangeException(nameof(waitConditions))
-            };
-        }
-
-        return waitUntil;
     }
 
     private static void ApplyConfiguredExecutablePath(PagePoolOptions options, LaunchOptions launchOptions)
@@ -299,9 +284,17 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
         {
             await _page.SetJavaScriptEnabledAsync(options.JavaScriptEnabled).ConfigureAwait(false);
 
-            if (options.ConfigurePageAsync is not null)
+            if (options.Advanced.ConfigurePageAsync is not null)
             {
-                await options.ConfigurePageAsync(_page, cancellationToken).ConfigureAwait(false);
+                var leasedPage = new LeasedPage(_page);
+                try
+                {
+                    await options.Advanced.ConfigurePageAsync(leasedPage, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    leasedPage.Expire();
+                }
             }
 
             await ResetAsync(options, cancellationToken).ConfigureAwait(false);
@@ -309,28 +302,47 @@ internal sealed class PuppeteerBrowserSessionFactory : IBrowserSessionFactory
 
         public async ValueTask PrepareForLeaseAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
-            if (options.ValidatePageHealthBeforeLease)
+            if (options.Advanced.ValidatePageHealthBeforeLease)
             {
                 await EnsurePageIsHealthyAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            if (options.BeforeLeaseAsync is not null)
+            if (options.Advanced.BeforeLeaseAsync is not null)
             {
-                await options.BeforeLeaseAsync(_page, cancellationToken).ConfigureAwait(false);
+                var leasedPage = new LeasedPage(_page);
+                try
+                {
+                    await options.Advanced.BeforeLeaseAsync(leasedPage, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    leasedPage.Expire();
+                }
             }
         }
 
         public async ValueTask ResetAsync(PagePoolOptions options, CancellationToken cancellationToken)
         {
-            await _page.GoToAsync(options.ResetTargetUrl, new NavigationOptions
+            if (options.Advanced.ResetStrategy == PageResetStrategy.Navigate)
             {
-                WaitUntil = ToWaitUntilNavigation(options.ResetWaitConditions),
-                Timeout = (int)options.ResetNavigationTimeout.TotalMilliseconds
-            }).ConfigureAwait(false);
+                await _page.GoToAsync(options.ResetTargetUrl, new NavigationOptions
+                {
+                    WaitUntil = PuppeteerOptionMapper.ToWaitUntilNavigation(options.Advanced.ResetWaitConditions),
+                    Timeout = (int)options.Advanced.ResetNavigationTimeout.TotalMilliseconds
+                }).WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else if (options.Advanced.ResetStrategy == PageResetStrategy.SetContent)
+            {
+                await _page.SetContentAsync(options.Advanced.ResetContent, new NavigationOptions
+                {
+                    WaitUntil = PuppeteerOptionMapper.ToWaitUntilNavigation(options.Advanced.ResetWaitConditions),
+                    Timeout = (int)options.Advanced.ResetNavigationTimeout.TotalMilliseconds
+                }).WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
 
             await _page.SetJavaScriptEnabledAsync(options.JavaScriptEnabled).ConfigureAwait(false);
 
-            if (options.ClearCookiesOnReturn)
+            if (options.Advanced.ClearCookiesOnReturn)
             {
                 var cookies = await _page.GetCookiesAsync().ConfigureAwait(false);
                 if (cookies.Length > 0)

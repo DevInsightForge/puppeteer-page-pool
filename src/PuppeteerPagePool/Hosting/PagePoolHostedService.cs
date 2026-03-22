@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
+using PuppeteerPagePool.Core;
 
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Hosting;
 
 internal sealed class PagePoolHostedService : IHostedService
 {

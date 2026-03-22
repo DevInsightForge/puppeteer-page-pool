@@ -1,4 +1,4 @@
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Configuration;
 
 /// <summary>
 /// Stable launch configuration used by the pool for local browser startup.
