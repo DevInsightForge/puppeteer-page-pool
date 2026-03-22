@@ -1,0 +1,30 @@
+using PuppeteerSharp;
+
+namespace PuppeteerPagePool.Internal;
+
+internal interface IBrowserSession : IAsyncDisposable
+{
+    bool IsConnected { get; }
+
+    event EventHandler? Disconnected;
+
+    ValueTask<IPageSession> CreatePageAsync(CancellationToken cancellationToken);
+}
+
+internal interface IPageSession : IAsyncDisposable
+{
+    IPage Page { get; }
+
+    bool IsClosed { get; }
+
+    ValueTask InitializeAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken);
+
+    ValueTask PrepareForLeaseAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken);
+
+    ValueTask ResetAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken);
+}
+
+internal interface IBrowserSessionFactory
+{
+    ValueTask<IBrowserSession> CreateAsync(PuppeteerPagePoolOptions options, CancellationToken cancellationToken);
+}
