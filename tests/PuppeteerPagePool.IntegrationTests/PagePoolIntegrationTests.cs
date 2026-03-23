@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using PuppeteerPagePool.DependencyInjection;
+using PuppeteerSharp;
 
 namespace PuppeteerPagePool.IntegrationTests;
 
@@ -11,17 +11,16 @@ public sealed class PagePoolIntegrationTests
         await using var server = new TestServer();
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddPagePool(options =>
+        services.AddPuppeteerPagePool(options =>
         {
             options.PoolSize = 1;
             options.AcquireTimeout = TimeSpan.FromSeconds(10);
             options.ShutdownTimeout = TimeSpan.FromSeconds(10);
             options.ResetTargetUrl = new Uri(server.BaseAddress, "reset").ToString();
-            options.BrowserCachePath = Path.Combine(Path.GetTempPath(), "puppeteer-page-pool-tests", Guid.NewGuid().ToString("N"));
-            options.LaunchOptions = new PagePoolLaunchOptions
+            options.LaunchOptions = new LaunchOptions
             {
                 Headless = true,
-                TimeoutMilliseconds = 120_000,
+                Timeout = 120_000,
                 Args =
                 [
                     "--disable-dev-shm-usage",
@@ -37,24 +36,24 @@ public sealed class PagePoolIntegrationTests
 
         var pool = serviceProvider.GetRequiredService<IPagePool>();
 
-        await pool.WithPage(
-            async page =>
+        await pool.ExecuteAsync(
+            async (page, cancellationToken) =>
             {
                 await page.GoToAsync(new Uri(server.BaseAddress, "state").ToString());
             });
 
-        var state = await pool.WithPage(
-            async page =>
+        var state = await pool.ExecuteAsync(
+            async (page, cancellationToken) =>
             {
                 var storageState = await page.EvaluateExpressionAsync<string>("JSON.stringify({ local: localStorage.getItem('render-state'), session: sessionStorage.getItem('render-session') })");
-                var cookieNames = (await page.GetCookiesAsync()).Select(cookie => cookie.Name).ToArray();
-                return (storageState, cookieNames);
+                var cookieHeader = await page.EvaluateExpressionAsync<string>("document.cookie");
+                return (storageState, cookieHeader);
             });
 
         var snapshot = await pool.GetSnapshotAsync();
 
         Assert.Equal("""{"local":null,"session":null}""", state.storageState);
-        Assert.DoesNotContain("session", state.cookieNames);
+        Assert.DoesNotContain("session=", state.cookieHeader ?? string.Empty);
         Assert.True(snapshot.BrowserConnected);
         Assert.Equal(0, snapshot.LeasedPages);
         Assert.Equal(1, snapshot.AvailablePages);

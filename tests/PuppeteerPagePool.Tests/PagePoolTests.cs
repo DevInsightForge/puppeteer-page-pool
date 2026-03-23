@@ -1,7 +1,6 @@
+using System.Reflection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using NSubstitute;
-using PuppeteerPagePool.Internal;
 using PuppeteerSharp;
 
 namespace PuppeteerPagePool.Tests;
@@ -10,7 +9,7 @@ public sealed class PagePoolTests
 {
     [Theory]
     [MemberData(nameof(InvalidOptionScenarios))]
-    public void Options_validation_rejects_invalid_configuration(Action<PagePoolOptions> mutate, Type exceptionType)
+    public void Validate_rejects_invalid_configuration(Action<PagePoolOptions> mutate, Type exceptionType)
     {
         var options = new PagePoolOptions();
         mutate(options);
@@ -21,7 +20,7 @@ public sealed class PagePoolTests
     }
 
     [Fact]
-    public void Options_validation_accepts_valid_configuration()
+    public void Validate_accepts_valid_configuration()
     {
         var options = new PagePoolOptions();
 
@@ -29,9 +28,9 @@ public sealed class PagePoolTests
     }
 
     [Fact]
-    public async Task Acquire_and_return_preserves_counts()
+    public async Task Execute_async_preserves_snapshot_counts()
     {
-        var harness = new PoolHarness(poolSize: 2);
+        var harness = new PoolHarness(2);
         await using var pool = harness.CreatePool();
 
         await pool.StartAsync(CancellationToken.None);
@@ -41,81 +40,131 @@ public sealed class PagePoolTests
         Assert.Equal(2, initial.AvailablePages);
         Assert.Equal(0, initial.LeasedPages);
 
-        await pool.WithPage(
-            async page =>
+        await pool.ExecuteAsync(
+            async (page, cancellationToken) =>
             {
                 await Task.Yield();
 
-                var during = await pool.GetSnapshotAsync();
+                var during = await pool.GetSnapshotAsync(cancellationToken);
 
                 Assert.Equal(1, during.AvailablePages);
                 Assert.Equal(1, during.LeasedPages);
                 Assert.NotNull(page);
-            })
-            ;
+            });
 
         var final = await pool.GetSnapshotAsync();
 
         Assert.Equal(2, final.AvailablePages);
         Assert.Equal(0, final.LeasedPages);
-        Assert.Equal(1, harness.Session.TotalResetCount);
+        Assert.Equal(1, harness.Runtime.TotalResetCount);
     }
 
     [Fact]
     public async Task Execute_async_returns_callback_result()
     {
-        var harness = new PoolHarness(poolSize: 1);
+        var harness = new PoolHarness(1);
         await using var pool = harness.CreatePool();
 
         await pool.StartAsync(CancellationToken.None);
 
-        var result = await pool.WithPage(page => page);
+        var result = await pool.ExecuteAsync(
+            static async (page, cancellationToken) =>
+            {
+                await Task.Yield();
+                return page is not null;
+            },
+            CancellationToken.None);
 
-        Assert.NotNull(result);
+        Assert.True(result);
+    }
+
+    [Fact]
+    public async Task Execute_async_invalidates_leased_page_after_callback()
+    {
+        var harness = new PoolHarness(1);
+        await using var pool = harness.CreatePool();
+
+        await pool.StartAsync(CancellationToken.None);
+
+        ILeasedPage? captured = null;
+
+        await pool.ExecuteAsync(
+            static (page, cancellationToken) =>
+            {
+                return ValueTask.CompletedTask;
+            });
+
+        await pool.ExecuteAsync(
+            (page, cancellationToken) =>
+            {
+                captured = page;
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.NotNull(captured);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => captured!.GetTitleAsync());
     }
 
     [Fact]
     public async Task Acquire_timeout_throws_when_pool_is_exhausted()
     {
-        var harness = new PoolHarness(poolSize: 1, acquireTimeout: TimeSpan.FromMilliseconds(50));
+        var harness = new PoolHarness(1, TimeSpan.FromMilliseconds(50));
         await using var pool = harness.CreatePool();
 
         await pool.StartAsync(CancellationToken.None);
 
         var releaseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var inFlight = pool.WithPage(_ => new ValueTask(releaseGate.Task));
+        var inFlight = pool.ExecuteAsync((page, cancellationToken) => new ValueTask(releaseGate.Task));
 
         await Assert.ThrowsAsync<PagePoolAcquireTimeoutException>(
-            () => pool.WithPage(_ => ValueTask.CompletedTask).AsTask());
+            () => pool.ExecuteAsync((page, cancellationToken) => ValueTask.CompletedTask).AsTask());
 
         releaseGate.TrySetResult();
         await inFlight;
     }
 
     [Fact]
-    public async Task Unhealthy_lease_is_replaced()
+    public async Task Failed_operation_replaces_page()
     {
-        var harness = new PoolHarness(poolSize: 2);
+        var harness = new PoolHarness(2);
         await using var pool = harness.CreatePool();
 
         await pool.StartAsync(CancellationToken.None);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => pool.WithPage(_ => throw new InvalidOperationException("Simulated operation failure.")).AsTask());
+            () => pool.ExecuteAsync(static (page, cancellationToken) => throw new InvalidOperationException("boom")).AsTask());
 
         var snapshot = await pool.GetSnapshotAsync();
 
         Assert.Equal(2, snapshot.AvailablePages);
         Assert.Equal(0, snapshot.LeasedPages);
-        Assert.Equal(1, snapshot.ReplacementCount);
-        Assert.Equal(3, harness.Session.TotalPageCount);
-        Assert.Equal(1, harness.Session.DisposedPageCount);
+        Assert.Equal(3, harness.Runtime.TotalPageCount);
+        Assert.Equal(1, harness.Runtime.DisposedPageCount);
     }
 
     [Fact]
-    public async Task Parallel_contention_keeps_pool_counts_consistent()
+    public async Task Invalid_page_is_replaced_before_lease()
     {
-        var harness = new PoolHarness(poolSize: 2);
+        var harness = new PoolHarness(1);
+        await using var pool = harness.CreatePool();
+
+        await pool.StartAsync(CancellationToken.None);
+        harness.Runtime.Pages[0].ReadyState = "loading";
+
+        await pool.ExecuteAsync(static (page, cancellationToken) => ValueTask.CompletedTask);
+
+        var snapshot = await pool.GetSnapshotAsync();
+
+        Assert.Equal(1, snapshot.AvailablePages);
+        Assert.Equal(0, snapshot.LeasedPages);
+        Assert.Equal(2, harness.Runtime.TotalPageCount);
+        Assert.Equal(1, harness.Runtime.DisposedPageCount);
+    }
+
+    [Fact]
+    public async Task Parallel_contention_keeps_snapshot_consistent()
+    {
+        var harness = new PoolHarness(2);
         await using var pool = harness.CreatePool();
 
         await pool.StartAsync(CancellationToken.None);
@@ -126,8 +175,8 @@ public sealed class PagePoolTests
 
         async Task WorkerAsync()
         {
-            await pool.WithPage(
-                async _ =>
+            await pool.ExecuteAsync(
+                async (page, cancellationToken) =>
                 {
                     if (Interlocked.Increment(ref acquiredCount) == 2)
                     {
@@ -159,22 +208,22 @@ public sealed class PagePoolTests
     }
 
     [Fact]
-    public async Task Shutdown_rejects_new_leases()
+    public async Task Stop_rejects_new_leases()
     {
-        var harness = new PoolHarness(poolSize: 1);
+        var harness = new PoolHarness(1);
         await using var pool = harness.CreatePool();
 
         await pool.StartAsync(CancellationToken.None);
 
         var releaseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var inFlight = pool.WithPage(_ => new ValueTask(releaseGate.Task));
+        var inFlight = pool.ExecuteAsync((page, cancellationToken) => new ValueTask(releaseGate.Task));
         var stopTask = pool.StopAsync(CancellationToken.None);
 
         await Task.Delay(25);
 
         Assert.False(stopTask.IsCompleted);
         await Assert.ThrowsAsync<PagePoolDisposedException>(
-            () => pool.WithPage(_ => ValueTask.CompletedTask).AsTask());
+            () => pool.ExecuteAsync((page, cancellationToken) => ValueTask.CompletedTask).AsTask());
 
         releaseGate.TrySetResult();
         await inFlight;
@@ -182,113 +231,47 @@ public sealed class PagePoolTests
     }
 
     [Fact]
-    public async Task Browser_health_check_detects_unresponsive_browser()
+    public async Task Browser_health_check_detects_unresponsive_runtime()
     {
-        var harness = new PoolHarness(poolSize: 1);
-        harness.Session.IsResponsive = false;
+        var harness = new PoolHarness(1);
+        harness.Runtime.IsResponsive = false;
         await using var pool = harness.CreatePool();
 
         await pool.StartAsync(CancellationToken.None);
 
-        var healthy = await pool.IsBrowserHealthyAsync(CancellationToken.None);
+        var healthy = await pool.IsHealthyAsync(CancellationToken.None);
 
         Assert.False(healthy);
     }
 
-    [Fact]
-    public async Task Invalid_page_health_triggers_replacement_before_lease()
-    {
-        var harness = new PoolHarness(poolSize: 1);
-        await using var pool = harness.CreatePool();
-
-        await pool.StartAsync(CancellationToken.None);
-        harness.Session.Pages[0].ReadyState = "loading";
-
-        await pool.WithPage(page => page);
-
-        var snapshot = await pool.GetSnapshotAsync();
-
-        Assert.Equal(1, snapshot.ReplacementCount);
-        Assert.Equal(2, harness.Session.TotalPageCount);
-        Assert.Equal(1, harness.Session.DisposedPageCount);
-        Assert.Equal(0, snapshot.LeasedPages);
-    }
-
     public static IEnumerable<object[]> InvalidOptionScenarios()
     {
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.PoolSize = 0),
-            typeof(ArgumentOutOfRangeException)
-        ];
-
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.AcquireTimeout = TimeSpan.Zero),
-            typeof(ArgumentOutOfRangeException)
-        ];
-
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.ShutdownTimeout = TimeSpan.Zero),
-            typeof(ArgumentOutOfRangeException)
-        ];
-
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.ResetTargetUrl = "not-a-uri"),
-            typeof(ArgumentException)
-        ];
-
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.MaxPageUses = 0),
-            typeof(ArgumentOutOfRangeException)
-        ];
-
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.MaxConsecutiveLeaseFailures = 0),
-            typeof(ArgumentOutOfRangeException)
-        ];
-
+        yield return [(Action<PagePoolOptions>)(options => options.PoolSize = 0), typeof(ArgumentOutOfRangeException)];
+        yield return [(Action<PagePoolOptions>)(options => options.AcquireTimeout = TimeSpan.Zero), typeof(ArgumentOutOfRangeException)];
+        yield return [(Action<PagePoolOptions>)(options => options.ShutdownTimeout = TimeSpan.Zero), typeof(ArgumentOutOfRangeException)];
+        yield return [(Action<PagePoolOptions>)(options => options.ResetTargetUrl = "not-a-uri"), typeof(ArgumentException)];
+        yield return [(Action<PagePoolOptions>)(options => options.MaxPageUses = 0), typeof(ArgumentOutOfRangeException)];
         yield return
         [
             (Action<PagePoolOptions>)(options =>
             {
-                options.LaunchOptions = new PagePoolLaunchOptions();
-                options.ConnectOptions = new PagePoolConnectOptions
+                options.LaunchOptions = new LaunchOptions();
+                options.ConnectOptions = new ConnectOptions
                 {
-                    BrowserWebSocketEndpoint = "ws://127.0.0.1:3000"
+                    BrowserWSEndpoint = "ws://127.0.0.1:3000"
                 };
             }),
             typeof(ArgumentException)
         ];
-
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.BrowserHealthCheckTimeout = TimeSpan.Zero),
-            typeof(ArgumentOutOfRangeException)
-        ];
-
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.ResetNavigationTimeout = TimeSpan.Zero),
-            typeof(ArgumentOutOfRangeException)
-        ];
-
-        yield return
-        [
-            (Action<PagePoolOptions>)(options => options.ResetWaitConditions = []),
-            typeof(ArgumentException)
-        ];
+        yield return [(Action<PagePoolOptions>)(options => options.ResetNavigationTimeout = TimeSpan.Zero), typeof(ArgumentOutOfRangeException)];
+        yield return [(Action<PagePoolOptions>)(options => options.ResetWaitConditions = []), typeof(ArgumentException)];
     }
 
     private sealed class PoolHarness(int poolSize, TimeSpan? acquireTimeout = null)
     {
-        private readonly TestBrowserSessionFactory _factory = new();
+        private readonly FakeBrowserRuntimeFactory _factory = new();
 
-        public TestBrowserSession Session => _factory.Session;
+        public FakeBrowserRuntime Runtime => _factory.Runtime;
 
         public PagePool CreatePool()
         {
@@ -303,106 +286,162 @@ public sealed class PagePoolTests
             return new PagePool(Options.Create(options), NullLogger<PagePool>.Instance, _factory);
         }
     }
+}
 
-    private sealed class TestBrowserSessionFactory : IBrowserSessionFactory
+internal sealed class FakeBrowserRuntimeFactory : IBrowserRuntimeFactory
+{
+    public FakeBrowserRuntime Runtime { get; } = new();
+
+    public ValueTask<IBrowserRuntime> CreateAsync(PagePoolOptions options, CancellationToken cancellationToken)
     {
-        public TestBrowserSession Session { get; } = new();
+        return ValueTask.FromResult<IBrowserRuntime>(Runtime);
+    }
+}
 
-        public ValueTask<IBrowserSession> CreateAsync(PagePoolOptions options, CancellationToken cancellationToken)
-        {
-            return ValueTask.FromResult<IBrowserSession>(Session);
-        }
+internal sealed class FakeBrowserRuntime : IBrowserRuntime
+{
+    private readonly List<FakePageSession> _pages = [];
+
+    public bool IsConnected { get; private set; } = true;
+
+    public bool IsResponsive { get; set; } = true;
+
+    public event EventHandler? Disconnected;
+
+    public IReadOnlyList<FakePageSession> Pages => _pages;
+
+    public int TotalPageCount => _pages.Count;
+
+    public int TotalResetCount => _pages.Sum(page => page.ResetCount);
+
+    public int DisposedPageCount => _pages.Count(page => page.DisposeCount > 0);
+
+    public ValueTask<IPageSession> CreatePageAsync(CancellationToken cancellationToken)
+    {
+        var page = new FakePageSession();
+        _pages.Add(page);
+        return ValueTask.FromResult<IPageSession>(page);
     }
 
-    private sealed class TestBrowserSession : IBrowserSession
+    public ValueTask<bool> IsResponsiveAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        private readonly List<TestPageSession> _pages = [];
-
-        public bool IsConnected { get; private set; } = true;
-
-        public bool IsResponsive { get; set; } = true;
-
-        public event EventHandler? Disconnected;
-
-        public IReadOnlyList<TestPageSession> Pages => _pages;
-
-        public int TotalPageCount => _pages.Count;
-
-        public int TotalResetCount => _pages.Sum(page => page.ResetCount);
-
-        public int DisposedPageCount => _pages.Count(page => page.DisposedCount > 0);
-
-        public ValueTask<IPageSession> CreatePageAsync(CancellationToken cancellationToken)
-        {
-            var page = new TestPageSession();
-            _pages.Add(page);
-            return ValueTask.FromResult<IPageSession>(page);
-        }
-
-        public ValueTask<bool> IsResponsiveAsync(TimeSpan timeout, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(IsConnected && IsResponsive);
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            IsConnected = false;
-            return ValueTask.CompletedTask;
-        }
-
-        public void TriggerDisconnected()
-        {
-            IsConnected = false;
-            Disconnected?.Invoke(this, EventArgs.Empty);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(IsConnected && IsResponsive);
     }
 
-    private sealed class TestPageSession : IPageSession
+    public ValueTask DisposeAsync()
     {
-        public IPage Page { get; } = Substitute.For<IPage>();
+        IsConnected = false;
+        return ValueTask.CompletedTask;
+    }
 
-        public bool IsClosed { get; private set; }
+    public void TriggerDisconnected()
+    {
+        IsConnected = false;
+        Disconnected?.Invoke(this, EventArgs.Empty);
+    }
+}
 
-        public string ReadyState { get; set; } = "complete";
+internal sealed class FakePageSession : IPageSession
+{
+    public IPage Page { get; } = InterfaceProxy.Create<IPage>();
 
-        public int InitializeCount { get; private set; }
+    public bool IsClosed { get; private set; }
 
-        public int PrepareCount { get; private set; }
+    public string ReadyState { get; set; } = "complete";
 
-        public int ResetCount { get; private set; }
+    public int InitializeCount { get; private set; }
 
-        public int DisposedCount { get; private set; }
+    public int PrepareCount { get; private set; }
 
-        public ValueTask InitializeAsync(PagePoolOptions options, CancellationToken cancellationToken)
+    public int ResetCount { get; private set; }
+
+    public int DisposeCount { get; private set; }
+
+    public ValueTask InitializeAsync(PagePoolOptions options, CancellationToken cancellationToken)
+    {
+        InitializeCount++;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask PrepareForLeaseAsync(PagePoolOptions options, CancellationToken cancellationToken)
+    {
+        PrepareCount++;
+
+        if (ReadyState is not ("complete" or "interactive"))
         {
-            InitializeCount++;
-            return ValueTask.CompletedTask;
+            throw new InvalidOperationException("Invalid ready state.");
         }
 
-        public ValueTask PrepareForLeaseAsync(PagePoolOptions options, CancellationToken cancellationToken)
-        {
-            PrepareCount++;
+        return ValueTask.CompletedTask;
+    }
 
-            if (options.ValidatePageHealthBeforeLease && ReadyState is not ("complete" or "interactive"))
+    public ValueTask ResetAsync(PagePoolOptions options, CancellationToken cancellationToken)
+    {
+        ResetCount++;
+        ReadyState = "complete";
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        DisposeCount++;
+        IsClosed = true;
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal static class InterfaceProxy
+{
+    public static T Create<T>() where T : class
+    {
+        return DispatchProxy.Create<T, DefaultDispatchProxy>();
+    }
+
+    private class DefaultDispatchProxy : DispatchProxy
+    {
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod is null)
             {
-                throw new InvalidOperationException("Invalid ready state.");
+                return null;
             }
 
-            return ValueTask.CompletedTask;
+            return GetDefaultValue(targetMethod.ReturnType);
         }
 
-        public ValueTask ResetAsync(PagePoolOptions options, CancellationToken cancellationToken)
+        private static object? GetDefaultValue(Type type)
         {
-            ResetCount++;
-            return ValueTask.CompletedTask;
-        }
+            if (type == typeof(void))
+            {
+                return null;
+            }
 
-        public ValueTask DisposeAsync()
-        {
-            DisposedCount++;
-            IsClosed = true;
-            return ValueTask.CompletedTask;
+            if (type == typeof(Task))
+            {
+                return Task.CompletedTask;
+            }
+
+            if (type == typeof(ValueTask))
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Task<>))
+            {
+                var resultType = type.GetGenericArguments()[0];
+                var result = resultType.IsValueType ? Activator.CreateInstance(resultType) : null;
+                return typeof(Task).GetMethod(nameof(Task.FromResult))!.MakeGenericMethod(resultType).Invoke(null, [result]);
+            }
+
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ValueTask<>))
+            {
+                var resultType = type.GetGenericArguments()[0];
+                var result = resultType.IsValueType ? Activator.CreateInstance(resultType) : null;
+                return Activator.CreateInstance(type, result);
+            }
+
+            return type.IsValueType ? Activator.CreateInstance(type) : null;
         }
     }
 }
