@@ -10,6 +10,7 @@ internal static class BrowserLaunchOptions
 {
     private static readonly string[] DefaultArguments =
     [
+        "--headless=new",
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
@@ -37,11 +38,7 @@ internal static class BrowserLaunchOptions
         launchOptions.Headless = true;
         launchOptions.HeadlessMode = HeadlessMode.True;
         launchOptions.Devtools = false;
-
-        if (launchOptions.Args is null || launchOptions.Args.Length == 0)
-        {
-            launchOptions.Args = [.. DefaultArguments];
-        }
+        launchOptions.Args = MergeArguments(launchOptions.Args);
 
         if (!string.IsNullOrWhiteSpace(launchOptions.ExecutablePath))
         {
@@ -108,6 +105,61 @@ internal static class BrowserLaunchOptions
             Dictionary<string, object> items => new Dictionary<string, object>(items),
             _ => value
         };
+    }
+
+    private static string[] MergeArguments(string[]? userArguments)
+    {
+        if (userArguments is null || userArguments.Length == 0)
+        {
+            return [.. DefaultArguments];
+        }
+
+        var merged = new List<string>(DefaultArguments.Length + userArguments.Length);
+        var argumentIndexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var argument in DefaultArguments)
+        {
+            AddOrReplaceArgument(merged, argumentIndexes, argument);
+        }
+
+        foreach (var argument in userArguments)
+        {
+            AddOrReplaceArgument(merged, argumentIndexes, argument);
+        }
+
+        return [.. merged];
+    }
+
+    private static void AddOrReplaceArgument(
+        List<string> arguments,
+        Dictionary<string, int> argumentIndexes,
+        string argument)
+    {
+        if (string.IsNullOrWhiteSpace(argument))
+        {
+            return;
+        }
+
+        var key = GetArgumentKey(argument);
+        if (argumentIndexes.TryGetValue(key, out var index))
+        {
+            arguments[index] = argument;
+            return;
+        }
+
+        argumentIndexes[key] = arguments.Count;
+        arguments.Add(argument);
+    }
+
+    private static string GetArgumentKey(string argument)
+    {
+        if (!argument.StartsWith("--", StringComparison.Ordinal))
+        {
+            return argument;
+        }
+
+        var separatorIndex = argument.IndexOf('=');
+        return separatorIndex < 0 ? argument : argument[..separatorIndex];
     }
 
     private static void ValidateExecutable(string executablePath)

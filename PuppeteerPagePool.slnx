@@ -2,6 +2,9 @@
   <Folder Name="/src/">
     <Project Path="src/PuppeteerPagePool/PuppeteerPagePool.csproj" />
   </Folder>
+  <Folder Name="/examples/">
+    <Project Path="examples/PuppeteerPagePool.Sample/PuppeteerPagePool.Sample.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/PuppeteerPagePool.IntegrationTests/PuppeteerPagePool.IntegrationTests.csproj" />
     <Project Path="tests/PuppeteerPagePool.Tests/PuppeteerPagePool.Tests.csproj" />

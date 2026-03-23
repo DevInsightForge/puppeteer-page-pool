@@ -3,8 +3,10 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <PackageId>PuppeteerPagePool</PackageId>
+    <Version>0.1.0</Version>
     <AssemblyName>PuppeteerPagePool</AssemblyName>
     <RootNamespace>PuppeteerPagePool</RootNamespace>
+    <Title>PuppeteerPagePool</Title>
     <Description>High-performance pooled page leasing for PuppeteerSharp with DI and health checks.</Description>
     <PackageTags>puppeteer puppeteersharp browser automation pooling performance pdf rendering</PackageTags>
     <Authors>imzihad21</Authors>
