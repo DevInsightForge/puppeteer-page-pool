@@ -73,48 +73,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set up notification script
-        continue-on-error: true
-        shell: bash
-        env:
-          NOTIFY_SCRIPT: ${{ secrets.NOTIFY_SCRIPT }}
-        run: |
-          set -x
-          printf '%s\n' "$NOTIFY_SCRIPT" > /tmp/notify.sh
-          chmod 700 /tmp/notify.sh
-          ls -l /tmp/notify.sh
-
-      - name: Notify publish start
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -x
-          message="Publish started. repository=${{ github.repository }} ref_name=${{ github.ref_name }} actor=${{ github.actor }} sha=${{ github.sha }}"
-          if [ -x /tmp/notify.sh ]; then
-            /tmp/notify.sh "$message"
-          else
-            echo "Notification script unavailable; skipping."
-          fi
-
       - uses: actions/download-artifact@v4
         with:
           name: release-packages
           path: ./artifacts
 
       - name: Publish to NuGet
+        id: publish_nuget
+        continue-on-error: true
         run: dotnet nuget push "./artifacts/PuppeteerPagePool.*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key "${{ secrets.NUGET_API_KEY }}" --skip-duplicate --no-symbols
 
       - name: Publish to GitHub Packages
+        id: publish_github
+        if: always()
+        continue-on-error: true
         run: dotnet nuget push "./artifacts/PuppeteerPagePool.*.nupkg" --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key "${{ secrets.GITHUB_TOKEN }}" --skip-duplicate --no-symbols
+
+      - name: Validate publish outcomes
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.publish_nuget.outcome }}" != "success" ] || [ "${{ steps.publish_github.outcome }}" != "success" ]; then
+            echo "Publish failed. nuget=${{ steps.publish_nuget.outcome }} github=${{ steps.publish_github.outcome }}"
+            exit 1
+          fi
 
       - name: Notify publish result
         if: always()
         continue-on-error: true
         shell: bash
+        env:
+          NOTIFY_SCRIPT: ${{ secrets.NOTIFY_SCRIPT }}
         run: |
-          set -x
-          message="Publish ${{ job.status }}. repository=${{ github.repository }} ref_name=${{ github.ref_name }} actor=${{ github.actor }} sha=${{ github.sha }}"
-          if [ -x /tmp/notify.sh ]; then
+          message="Publish ${{ job.status }}. repository=${{ github.repository }} ref_name=${{ github.ref_name }} actor=${{ github.actor }} sha=${{ github.sha }} nuget_upload=${{ steps.publish_nuget.outcome }} github_upload=${{ steps.publish_github.outcome }}"
+          if [ -n "$NOTIFY_SCRIPT" ]; then
+            printf '%s\n' "$NOTIFY_SCRIPT" > /tmp/notify.sh
+            chmod 700 /tmp/notify.sh
             /tmp/notify.sh "$message"
           else
             echo "Notification script unavailable; skipping."
