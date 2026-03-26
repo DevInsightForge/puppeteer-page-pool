@@ -25,6 +25,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set up notification script
+        continue-on-error: true
+        shell: bash
+        env:
+          NOTIFY_SCRIPT: ${{ secrets.NOTIFY_SCRIPT }}
+        run: |
+          set -x
+          printf '%s\n' "$NOTIFY_SCRIPT" > /tmp/notify.sh
+          chmod 700 /tmp/notify.sh
+          ls -l /tmp/notify.sh
+
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@v5
         with:
@@ -37,4 +48,18 @@ jobs:
         run: dotnet build PuppeteerPagePool.slnx --configuration Release --no-restore
 
       - name: Test
+        id: test
         run: dotnet test tests/PuppeteerPagePool.Tests/PuppeteerPagePool.Tests.csproj --configuration Release --no-build /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:Threshold=${{ env.COVERAGE_THRESHOLD }} /p:ThresholdType=line /p:ThresholdStat=total
+
+      - name: Notify test failure
+        if: failure() && steps.test.outcome == 'failure'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -x
+          message="Tests failed. repository=${{ github.repository }} ref_name=${{ github.ref_name }} actor=${{ github.actor }} sha=${{ github.sha }}"
+          if [ -x /tmp/notify.sh ]; then
+            /tmp/notify.sh "$message"
+          else
+            echo "Notification script unavailable; skipping."
+          fi
