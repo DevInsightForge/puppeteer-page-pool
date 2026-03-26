@@ -1,11 +1,9 @@
-using PuppeteerSharp;
-
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Abstractions;
 
 /// <summary>
 /// Represents a lease-scoped page surface that remains valid only during the active pool callback.
 /// </summary>
-public interface ILeasedPage
+public interface ILeasedPage : IAsyncDisposable
 {
     /// <summary>
     /// Gets or sets the default navigation timeout in milliseconds for the leased page.
@@ -26,6 +24,26 @@ public interface ILeasedPage
     /// Gets a value indicating whether JavaScript execution is enabled for the page.
     /// </summary>
     bool IsJavaScriptEnabled { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the page is closed.
+    /// </summary>
+    bool IsClosed { get; }
+
+    /// <summary>
+    /// Gets the main frame of the page.
+    /// </summary>
+    IFrame MainFrame { get; }
+
+    /// <summary>
+    /// Gets all frames attached to the page.
+    /// </summary>
+    IFrame[] Frames { get; }
+
+    /// <summary>
+    /// Gets the browser context this page belongs to.
+    /// </summary>
+    IBrowserContext BrowserContext { get; }
 
     /// <summary>
     /// Gets the current page content.
@@ -120,7 +138,7 @@ public interface ILeasedPage
     /// <summary>
     /// Sets the user agent used by the page.
     /// </summary>
-    Task SetUserAgentAsync(string userAgent, UserAgentMetadata? userAgentData = null);
+    Task SetUserAgentAsync(string userAgent);
 
     /// <summary>
     /// Sets additional HTTP headers for outgoing requests.
@@ -136,6 +154,21 @@ public interface ILeasedPage
     /// Applies HTTP authentication credentials for subsequent requests.
     /// </summary>
     Task AuthenticateAsync(Credentials credentials);
+
+    /// <summary>
+    /// Sets the cache disabled state.
+    /// </summary>
+    Task SetCacheEnabledAsync(bool enabled);
+
+    /// <summary>
+    /// Sets the bypass CSP header.
+    /// </summary>
+    Task SetBypassCSPAsync(bool enabled);
+
+    /// <summary>
+    /// Sets the offline mode.
+    /// </summary>
+    Task SetOfflineModeAsync(bool offline);
 
     /// <summary>
     /// Writes a PDF file to disk.
@@ -176,121 +209,50 @@ public interface ILeasedPage
     /// Generates screenshot bytes using the supplied options.
     /// </summary>
     Task<byte[]> ScreenshotDataAsync(ScreenshotOptions options);
-}
-
-/// <summary>
-/// Wraps a live <see cref="IPage"/> and blocks further access once the lease ends.
-/// </summary>
-internal sealed class LeasedPage : ILeasedPage
-{
-    private readonly IPage _page;
-    private int _isActive = 1;
 
     /// <summary>
-    /// Initializes a new leased page wrapper around the supplied raw page.
+    /// Brings page to front (activates tab).
     /// </summary>
-    internal LeasedPage(IPage page)
-    {
-        _page = page;
-    }
-
-    public int DefaultNavigationTimeout
-    {
-        get => Page.DefaultNavigationTimeout;
-        set => Page.DefaultNavigationTimeout = value;
-    }
-
-    public int DefaultTimeout
-    {
-        get => Page.DefaultTimeout;
-        set => Page.DefaultTimeout = value;
-    }
-
-    public string Url => Page.Url;
-
-    public bool IsJavaScriptEnabled => Page.IsJavaScriptEnabled;
-
-    public Task<string> GetContentAsync(GetContentOptions? options = null) => Page.GetContentAsync(options);
-
-    public Task SetContentAsync(string html, NavigationOptions? options = null) => Page.SetContentAsync(html, options);
-
-    public Task<IResponse> GoToAsync(string url, NavigationOptions options) => Page.GoToAsync(url, options);
-
-    public Task<IResponse> GoToAsync(string url, int? timeout = null, WaitUntilNavigation[]? waitUntil = null) => Page.GoToAsync(url, timeout, waitUntil);
-
-    public Task<IResponse> GoToAsync(string url, WaitUntilNavigation waitUntil) => Page.GoToAsync(url, waitUntil);
-
-    public Task<IResponse> ReloadAsync(ReloadOptions options) => Page.ReloadAsync(options);
-
-    public Task<IResponse> ReloadAsync(int? timeout = null, WaitUntilNavigation[]? waitUntil = null) => Page.ReloadAsync(timeout, waitUntil);
-
-    public async Task WaitForNavigationAsync(NavigationOptions? options = null)
-    {
-        await Page.WaitForNavigationAsync(options).ConfigureAwait(false);
-    }
-
-    public Task WaitForNetworkIdleAsync(WaitForNetworkIdleOptions? options = null) => Page.WaitForNetworkIdleAsync(options);
-
-    public async Task WaitForSelectorAsync(string selector, WaitForSelectorOptions? options = null)
-    {
-        await Page.WaitForSelectorAsync(selector, options).ConfigureAwait(false);
-    }
-
-    public async Task WaitForFunctionAsync(string script, WaitForFunctionOptions? options = null, params object[] args)
-    {
-        await Page.WaitForFunctionAsync(script, options, args).ConfigureAwait(false);
-    }
-
-    public async Task WaitForFunctionAsync(string script, params object[] args)
-    {
-        await Page.WaitForFunctionAsync(script, args).ConfigureAwait(false);
-    }
-
-    public Task EvaluateExpressionAsync(string script) => Page.EvaluateExpressionAsync(script);
-
-    public Task<TResult> EvaluateExpressionAsync<TResult>(string script) => Page.EvaluateExpressionAsync<TResult>(script);
-
-    public Task EvaluateFunctionAsync(string pageFunction, params object[] args) => Page.EvaluateFunctionAsync(pageFunction, args);
-
-    public Task<TResult> EvaluateFunctionAsync<TResult>(string pageFunction, params object[] args) => Page.EvaluateFunctionAsync<TResult>(pageFunction, args);
-
-    public Task<string> GetTitleAsync() => Page.GetTitleAsync();
-
-    public Task SetViewportAsync(ViewPortOptions viewport) => Page.SetViewportAsync(viewport);
-
-    public Task SetUserAgentAsync(string userAgent, UserAgentMetadata? userAgentData = null) => Page.SetUserAgentAsync(userAgent, userAgentData);
-
-    public Task SetExtraHttpHeadersAsync(Dictionary<string, string> headers) => Page.SetExtraHttpHeadersAsync(headers);
-
-    public Task SetJavaScriptEnabledAsync(bool enabled) => Page.SetJavaScriptEnabledAsync(enabled);
-
-    public Task AuthenticateAsync(Credentials credentials) => Page.AuthenticateAsync(credentials);
-
-    public Task PdfAsync(string file) => Page.PdfAsync(file);
-
-    public Task PdfAsync(string file, PdfOptions options) => Page.PdfAsync(file, options);
-
-    public Task<byte[]> PdfDataAsync() => Page.PdfDataAsync();
-
-    public Task<byte[]> PdfDataAsync(PdfOptions options) => Page.PdfDataAsync(options);
-
-    public Task ScreenshotAsync(string file) => Page.ScreenshotAsync(file);
-
-    public Task ScreenshotAsync(string file, ScreenshotOptions options) => Page.ScreenshotAsync(file, options);
-
-    public Task<byte[]> ScreenshotDataAsync() => Page.ScreenshotDataAsync();
-
-    public Task<byte[]> ScreenshotDataAsync(ScreenshotOptions options) => Page.ScreenshotDataAsync(options);
+    Task BringToFrontAsync();
 
     /// <summary>
-    /// Marks the lease as inactive so future access fails fast.
+    /// Gets the cookies for the current page.
     /// </summary>
-    internal void Invalidate()
-    {
-        Interlocked.Exchange(ref _isActive, 0);
-    }
+    Task<CookieParam[]> GetCookiesAsync(params string[] urls);
 
-    private IPage Page => Volatile.Read(ref _isActive) == 1
-        ? _page
-        : throw new ObjectDisposedException(nameof(ILeasedPage), "The leased page is no longer active.");
+    /// <summary>
+    /// Deletes the specified cookies.
+    /// </summary>
+    Task DeleteCookieAsync(params CookieParam[] cookies);
+
+    /// <summary>
+    /// Sets the specified cookies.
+    /// </summary>
+    Task SetCookieAsync(params CookieParam[] cookies);
+
+    /// <summary>
+    /// Adds a script to be evaluated on every page navigation.
+    /// </summary>
+    Task EvaluateExpressionOnNewDocumentAsync(string script);
+
+    /// <summary>
+    /// Adds a function to be evaluated on every page navigation.
+    /// </summary>
+    Task EvaluateFunctionOnNewDocumentAsync(string pageFunction, params object[] args);
+
+    /// <summary>
+    /// Gets the target this page is associated with.
+    /// </summary>
+    ITarget Target { get; }
+
+    /// <summary>
+    /// Gets the browser this page belongs to.
+    /// </summary>
+    IBrowser Browser { get; }
+
+    /// <summary>
+    /// Gets the underlying <see cref="IPage"/> instance. Use with caution as it bypasses lease protection.
+    /// </summary>
+    IPage UnderlyingPage { get; }
 }
+

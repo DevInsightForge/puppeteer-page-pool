@@ -1,12 +1,15 @@
-using PuppeteerSharp;
-
-namespace PuppeteerPagePool;
+namespace PuppeteerPagePool.Core;
 
 /// <summary>
-/// Configures pooled page lifecycle, browser startup, reset behavior, and lease hooks.
+/// Configures pooled page lifecycle, browser startup, and reset behavior.
 /// </summary>
 public sealed class PagePoolOptions
 {
+    /// <summary>
+    /// Gets or sets the name of the pool. Used for logging, metrics, and tracing.
+    /// </summary>
+    public string PoolName { get; set; } = "default";
+
     /// <summary>
     /// Gets or sets the maximum number of pages kept in the pool.
     /// </summary>
@@ -26,6 +29,11 @@ public sealed class PagePoolOptions
     /// Gets or sets the maximum time to wait for active leases during shutdown.
     /// </summary>
     public TimeSpan ShutdownTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to drain all pages during shutdown before closing.
+    /// </summary>
+    public bool DrainOnShutdown { get; set; } = true;
 
     /// <summary>
     /// Gets or sets the absolute URL used to reset a page before it returns to the pool.
@@ -58,16 +66,6 @@ public sealed class PagePoolOptions
     public WaitUntilNavigation[] ResetWaitConditions { get; set; } = [WaitUntilNavigation.Load];
 
     /// <summary>
-    /// Gets or sets a hook that runs once for each newly created pooled page.
-    /// </summary>
-    public Func<ILeasedPage, CancellationToken, ValueTask>? ConfigurePageAsync { get; set; }
-
-    /// <summary>
-    /// Gets or sets a hook that runs before each lease is handed to user code.
-    /// </summary>
-    public Func<ILeasedPage, CancellationToken, ValueTask>? BeforeLeaseAsync { get; set; }
-
-    /// <summary>
     /// Gets or sets PuppeteerSharp launch options for starting a local Chromium instance.
     /// </summary>
     public LaunchOptions? LaunchOptions { get; set; }
@@ -84,17 +82,17 @@ public sealed class PagePoolOptions
     {
         if (PoolSize <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(PoolSize));
+            throw new ArgumentOutOfRangeException(nameof(PoolSize), "PoolSize must be greater than 0.");
         }
 
         if (AcquireTimeout <= TimeSpan.Zero)
         {
-            throw new ArgumentOutOfRangeException(nameof(AcquireTimeout));
+            throw new ArgumentOutOfRangeException(nameof(AcquireTimeout), "AcquireTimeout must be greater than 0.");
         }
 
         if (ShutdownTimeout <= TimeSpan.Zero)
         {
-            throw new ArgumentOutOfRangeException(nameof(ShutdownTimeout));
+            throw new ArgumentOutOfRangeException(nameof(ShutdownTimeout), "ShutdownTimeout must be greater than 0.");
         }
 
         if (string.IsNullOrWhiteSpace(ResetTargetUrl))
@@ -109,12 +107,12 @@ public sealed class PagePoolOptions
 
         if (LaunchOptions is not null && ConnectOptions is not null)
         {
-            throw new ArgumentException("LaunchOptions and ConnectOptions cannot both be set.");
+            throw new ArgumentException("LaunchOptions and ConnectOptions cannot both be set.", nameof(LaunchOptions));
         }
 
         if (LaunchOptions is not null && LaunchOptions.Timeout < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(LaunchOptions.Timeout));
+            throw new ArgumentOutOfRangeException(nameof(LaunchOptions.Timeout), "LaunchOptions.Timeout cannot be negative.");
         }
 
         if (ConnectOptions is not null &&
@@ -126,17 +124,17 @@ public sealed class PagePoolOptions
 
         if (ConnectOptions is not null && ConnectOptions.SlowMo < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(ConnectOptions.SlowMo));
+            throw new ArgumentOutOfRangeException(nameof(ConnectOptions.SlowMo), "ConnectOptions.SlowMo cannot be negative.");
         }
 
         if (MaxPageUses <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(MaxPageUses));
+            throw new ArgumentOutOfRangeException(nameof(MaxPageUses), "MaxPageUses must be greater than 0.");
         }
 
         if (ResetNavigationTimeout <= TimeSpan.Zero)
         {
-            throw new ArgumentOutOfRangeException(nameof(ResetNavigationTimeout));
+            throw new ArgumentOutOfRangeException(nameof(ResetNavigationTimeout), "ResetNavigationTimeout must be greater than 0.");
         }
 
         if (ResetWaitConditions.Length == 0)
