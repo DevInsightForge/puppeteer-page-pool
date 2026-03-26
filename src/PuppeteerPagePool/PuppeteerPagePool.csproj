@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <TargetFramework>net10.0</TargetFramework>
     <PackageId>PuppeteerPagePool</PackageId>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <Description>High-performance pooled page leasing for PuppeteerSharp with safe lifecycle handling and DI integration.</Description>
     <PackageTags>puppeteer puppeteersharp browser automation pooling performance pdf rendering dependency-injection</PackageTags>
     <Authors>imzihad21</Authors>
@@ -12,7 +12,7 @@
     <PackageProjectUrl>https://github.com/DevInsightForge/puppeteer-page-pool</PackageProjectUrl>
     <RepositoryUrl>https://github.com/DevInsightForge/puppeteer-page-pool</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageReleaseNotes>0.1.1: Interface abstractions moved into a dedicated namespace, DI lifecycle wiring simplified, and package API surface aligned for safer integration usage.</PackageReleaseNotes>
+    <PackageReleaseNotes>0.1.2: Hosted service startup now runs non-blocking so application boot no longer waits for browser warmup/download, with shutdown cancellation and startup failure logging. Package support is now net10.0 only.</PackageReleaseNotes>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

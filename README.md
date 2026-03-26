@@ -20,7 +20,6 @@ dotnet add package PuppeteerPagePool
 
 ## Target Frameworks
 
-- `net8.0`
 - `net10.0`
 
 ## Core Concepts
