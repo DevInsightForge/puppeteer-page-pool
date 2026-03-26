@@ -1,38 +1,85 @@
-name: Build and publish NuGet package
+name: Publish NuGet package
 
 on:
   push:
-    branches:
-      - production
+    tags:
+      - "v*"
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
-  build-test-pack-publish:
+  test:
     runs-on: ubuntu-latest
     env:
       CI: true
+      COVERAGE_THRESHOLD: 80
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
+      - name: Validate tagged commit is on main
+        shell: bash
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main"; then
+            echo "Tagged commit is not contained in main."
+            exit 1
+          fi
+
+      - name: Validate tag version matches project version
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}".TrimStart('v')
+          [xml]$project = Get-Content "src/PuppeteerPagePool/PuppeteerPagePool.csproj"
+          $projectVersion = $project.Project.PropertyGroup.Version | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($projectVersion)) {
+            throw "Version is missing in src/PuppeteerPagePool/PuppeteerPagePool.csproj."
+          }
+          if ($projectVersion -ne $tagVersion) {
+            throw "Tag version '$tagVersion' does not match project version '$projectVersion'."
+          }
+          "PACKAGE_VERSION=$tagVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Restore
         run: dotnet restore PuppeteerPagePool.slnx
 
       - name: Build
-        run: dotnet build PuppeteerPagePool.slnx --configuration Release --no-restore
+        run: dotnet build PuppeteerPagePool.slnx --configuration Release --no-restore /p:Version=${{ env.PACKAGE_VERSION }}
 
       - name: Test
-        run: dotnet test PuppeteerPagePool.slnx --configuration Release --no-build
+        run: dotnet test tests/PuppeteerPagePool.Tests/PuppeteerPagePool.Tests.csproj --configuration Release --no-build /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:Threshold=${{ env.COVERAGE_THRESHOLD }} /p:ThresholdType=line /p:ThresholdStat=total
 
       - name: Pack
-        run: dotnet pack src/PuppeteerPagePool/PuppeteerPagePool.csproj --configuration Release --no-build --output ./artifacts
+        run: dotnet pack src/PuppeteerPagePool/PuppeteerPagePool.csproj --configuration Release --no-build --output ./artifacts /p:Version=${{ env.PACKAGE_VERSION }}
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: artifacts/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: ./artifacts
 
       - name: Publish to NuGet
         run: dotnet nuget push "./artifacts/PuppeteerPagePool.*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key "${{ secrets.NUGET_API_KEY }}" --skip-duplicate --no-symbols
+
+      - name: Publish to GitHub Packages
+        run: dotnet nuget push "./artifacts/PuppeteerPagePool.*.nupkg" --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key "${{ secrets.GITHUB_TOKEN }}" --skip-duplicate --no-symbols

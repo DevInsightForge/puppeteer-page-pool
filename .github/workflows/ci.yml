@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+      COVERAGE_THRESHOLD: 80
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore PuppeteerPagePool.slnx
+
+      - name: Build
+        run: dotnet build PuppeteerPagePool.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/PuppeteerPagePool.Tests/PuppeteerPagePool.Tests.csproj --configuration Release --no-build /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:Threshold=${{ env.COVERAGE_THRESHOLD }} /p:ThresholdType=line /p:ThresholdStat=total
