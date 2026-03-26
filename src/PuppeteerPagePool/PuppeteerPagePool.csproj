@@ -13,8 +13,6 @@
     <RepositoryUrl>https://github.com/DevInsightForge/puppeteer-page-pool</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReleaseNotes>0.1.1: Interface abstractions moved into a dedicated namespace, DI lifecycle wiring simplified, and package API surface aligned for safer integration usage.</PackageReleaseNotes>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
